@@ -2,28 +2,22 @@ use bevy::render::camera::ScalingMode;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-/// We will store the world position of the mouse cursor here.
 #[derive(Resource, Default)]
 struct CursorWorldCoords(Vec2);
 
 #[derive(Component)]
 struct Collider;
 
-
 #[derive(Component)]
 struct HexShape;
 
 #[derive(Bundle)]
 struct HexBundle {
-    // You can nest bundles inside of other bundles like this
-    // Allowing you to compose their functionality
     sprite_bundle: SpriteBundle,
     collider: Collider,
 }
 
 impl HexBundle {
-    // This "builder method" allows us to reuse logic across our wall entities,
-    // making our code easier to read and less prone to bugs when we change the logic
     fn new(location: Vec2, texture: &Handle<Image>) -> HexBundle {
         HexBundle {
                 sprite_bundle: SpriteBundle {
@@ -66,6 +60,10 @@ enum Cell {
 #[derive(Resource, Default)]
 struct Game {
     dragging: bool,
+    move_to_original: bool,
+    selected_id: Option<Entity>,
+    original_transform: Transform,
+    mouse_offset: Vec2
 }
 
 fn main() {
@@ -81,7 +79,7 @@ fn main() {
         .insert_resource(Game { ..default() })
         .insert_resource(CursorWorldCoords { ..default() })
         .add_systems(Startup, setup)
-        .add_systems(Update, (my_cursor_system, game_update))
+        .add_systems(Update, (my_cursor_system, pickup_shape, move_shape, put_shape))
         .run();
 }
 
@@ -100,31 +98,136 @@ fn setup(
         SpatialBundle { transform: Transform::from_xyz(0., 0., 0.), ..default() }
     )).with_children(|parent| {
         parent.spawn(HexBundle::new(Vec2::ZERO, hex_texture_handle));
-        parent.spawn(HexBundle::new(HEX_UP + HEX_UP_LEFT, hex_texture_handle));
+        parent.spawn(HexBundle::new(HEX_UP + HEX_UP_RIGHT, hex_texture_handle));
         parent.spawn(HexBundle::new(HEX_UP, hex_texture_handle));
         parent.spawn(HexBundle::new(HEX_DOWN, hex_texture_handle));
-        parent.spawn(HexBundle::new(HEX_DOWN + HEX_DOWN_RIGHT, hex_texture_handle));
+        parent.spawn(HexBundle::new(HEX_DOWN + HEX_DOWN_LEFT, hex_texture_handle));
+    });
+
+    
+    commands.spawn((
+        HexShape,
+        SpatialBundle { transform: Transform::from_xyz(256., 0., 0.), ..default() }
+    )).with_children(|parent| {
+        parent.spawn(HexBundle::new(HEX_UP, hex_texture_handle));
+        parent.spawn(HexBundle::new(Vec2::ZERO, hex_texture_handle));
+        parent.spawn(HexBundle::new(HEX_DOWN, hex_texture_handle));
+    });
+
+    
+    commands.spawn((
+        HexShape,
+        SpatialBundle { transform: Transform::from_xyz(-256., 0., 0.), ..default() }
+    )).with_children(|parent| {
+        parent.spawn(HexBundle::new(HEX_UP_LEFT, hex_texture_handle));
+        parent.spawn(HexBundle::new(Vec2::ZERO, hex_texture_handle));
+        parent.spawn(HexBundle::new(HEX_DOWN_LEFT, hex_texture_handle));
     });
 }
 
-fn game_update(
+fn pickup_shape(
     world_cursor: Res<CursorWorldCoords>, 
     btn: Res<Input<MouseButton>>, 
-    game: ResMut<Game>,
-    free_hexes: Query<&Transform, With<Collider>>,
-    mut gizmos: Gizmos,
+    mut game: ResMut<Game>,
+    free_hexes: Query<(Entity, &Parent, &GlobalTransform), With<Collider>>,
+    shapes: Query<&Transform, With<HexShape>>,
+    gizmos: Gizmos,
+    commands: Commands,
 ) {
-    if !game.dragging {
-        free_hexes.for_each(|f| { 
-            if hex_collision_with_point(world_cursor.0, f) {
-                gizmos.circle_2d(f.translation.xy(), HEX_RADIUS, Color::RED);
+    // for (ent, parent, child_transform) in free_hexes.iter() {
+    //     gizmos.circle_2d(child_transform.translation().xy(), HEX_RADIUS, Color::RED);
+    // }
+    if !game.dragging && btn.just_pressed(MouseButton::Left) {
+        for (ent, parent, child_transform) in free_hexes.iter() {
+            if hex_collision_with_point(world_cursor.0, child_transform.translation()) {
+                println!("Clicked entity: {:?}, parent: {:?}", ent, parent.get());
+                game.dragging = true;
+                game.selected_id = Some(parent.get());
+                // commands.entity(parent.get())
+                //     .remove::<Enemy>();
+                
+                let parent_global_transform = shapes.get(parent.get());
+                if let Ok(transform) = parent_global_transform {
+                    game.original_transform = *transform;
+                    game.mouse_offset = transform.translation.xy() - world_cursor.0;
+                }
+                return;
             }
-         } );
+         }
     }
 }
 
-fn hex_collision_with_point(point: Vec2, transform: &Transform) -> bool{
-    transform.translation.xy().distance_squared(point) <= HEX_RADIUS * HEX_RADIUS
+fn move_shape(
+    world_cursor: Res<CursorWorldCoords>,
+    mut game: ResMut<Game>,
+    mut shapes: Query<&mut Transform, With<HexShape>>
+) {
+    if game.dragging {
+        if let Some(selected_id) = game.selected_id {
+            let parent_global_transform = shapes.get_mut(selected_id);
+            if let Ok(mut shape_transform) = parent_global_transform {
+                shape_transform.translation = Vec3 { x: game.mouse_offset.x + world_cursor.0.x, y: game.mouse_offset.y + world_cursor.0.y, z: 0. };
+            }
+        }
+    }
+
+    if game.move_to_original {
+        game.move_to_original = false;
+        if let Some(selected_id) = game.selected_id {
+            let parent_global_transform = shapes.get_mut(selected_id);
+            if let Ok(mut shape_transform) = parent_global_transform {
+                shape_transform.translation = game.original_transform.translation;
+                shape_transform.rotation = game.original_transform.rotation;
+            }
+        }
+    }
+}
+
+
+fn put_shape(
+    world_cursor: Res<CursorWorldCoords>, 
+    btn: Res<Input<MouseButton>>, 
+    mut game: ResMut<Game>,
+    free_hexes: Query<(&Parent, &GlobalTransform), With<Collider>>,
+    shapes: Query<(&Transform, &Children), With<HexShape>>,
+) {
+    if game.dragging && !btn.pressed(MouseButton::Left) {
+
+        println!("Trying to put piece");
+        if let Some(selected_id) = game.selected_id {
+            println!("Selected: {:?}", selected_id);
+            if let Ok(selected_shape) = shapes.get(selected_id) {
+                for child in selected_shape.1 {
+                    if let Ok(child_hex) = free_hexes.get(*child) {
+                        // selected_hex_transform.
+                        for (hex_parent, hex_transform) in free_hexes.iter() {
+                            
+                            println!("Check if same piece: left: {:?}, right: {:?}", hex_parent.get(), selected_id);
+                            if hex_parent.get() == selected_id {
+                                continue;
+                            }
+
+                            println!("Check collision with: {:?}", hex_transform.translation());
+                            if hex_collision_with_hex(child_hex.1.translation(), hex_transform.translation()) {
+                                println!("Move to original");
+                                game.move_to_original = true;
+                            }   
+                        }
+                    }
+                }
+            }
+        }
+
+        game.dragging = false;
+    }
+}
+
+fn hex_collision_with_point(point: Vec2, translation: Vec3) -> bool{
+    translation.xy().distance_squared(point) <= HEX_RADIUS * HEX_RADIUS
+}
+
+fn hex_collision_with_hex(point1: Vec3, point2: Vec3) -> bool{
+    point1.distance_squared(point2) <= HEX_RADIUS * HEX_RADIUS * 2.0
 }
 
 fn my_cursor_system(
