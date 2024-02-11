@@ -9,6 +9,9 @@ struct CursorWorldCoords(Vec2);
 struct Collider;
 
 #[derive(Component)]
+struct Selected;
+
+#[derive(Component)]
 struct HexShape;
 
 #[derive(Bundle)]
@@ -16,6 +19,9 @@ struct HexBundle {
     sprite_bundle: SpriteBundle,
     collider: Collider,
 }
+
+const DEFAULT_Z: f32 = 1.0;
+const SELECTED_Z: f32 = 1.0001;
 
 impl HexBundle {
     fn new(location: Vec2, texture: &Handle<Image>) -> HexBundle {
@@ -59,9 +65,6 @@ enum Cell {
 
 #[derive(Resource, Default)]
 struct Game {
-    dragging: bool,
-    move_to_original: bool,
-    selected_id: Option<Entity>,
     original_transform: Transform,
     mouse_offset: Vec2
 }
@@ -129,27 +132,23 @@ fn pickup_shape(
     world_cursor: Res<CursorWorldCoords>, 
     btn: Res<Input<MouseButton>>, 
     mut game: ResMut<Game>,
-    free_hexes: Query<(Entity, &Parent, &GlobalTransform), With<Collider>>,
-    shapes: Query<&Transform, With<HexShape>>,
-    gizmos: Gizmos,
-    commands: Commands,
+    hexagons: Query<(&Parent, &GlobalTransform), With<Collider>>,
+    shapes: Query<(&Transform, &Children), (With<HexShape>, Without<Selected>)>,
+    selected_shape: Query<&Transform, (With<HexShape>, With<Selected>)>,
+    mut commands: Commands,
 ) {
-    // for (ent, parent, child_transform) in free_hexes.iter() {
-    //     gizmos.circle_2d(child_transform.translation().xy(), HEX_RADIUS, Color::RED);
-    // }
-    if !game.dragging && btn.just_pressed(MouseButton::Left) {
-        for (ent, parent, child_transform) in free_hexes.iter() {
+    if selected_shape.is_empty() && btn.just_pressed(MouseButton::Left) {
+        for (parent, child_transform) in hexagons.iter() {
             if hex_collision_with_point(world_cursor.0, child_transform.translation()) {
-                println!("Clicked entity: {:?}, parent: {:?}", ent, parent.get());
-                game.dragging = true;
-                game.selected_id = Some(parent.get());
-                // commands.entity(parent.get())
-                //     .remove::<Enemy>();
-                
-                let parent_global_transform = shapes.get(parent.get());
-                if let Ok(transform) = parent_global_transform {
-                    game.original_transform = *transform;
-                    game.mouse_offset = transform.translation.xy() - world_cursor.0;
+                let parent_shape_result = shapes.get(parent.get());
+                if let Ok(parent_shape) = parent_shape_result {
+                    game.original_transform = *parent_shape.0;
+                    game.mouse_offset = parent_shape.0.translation.xy() - world_cursor.0;
+
+                    commands.entity(parent.get()).insert(Selected);
+                    for child in parent_shape.1.iter() {
+                        commands.entity(*child).insert(Selected);
+                    }
                 }
                 return;
             }
@@ -159,66 +158,43 @@ fn pickup_shape(
 
 fn move_shape(
     world_cursor: Res<CursorWorldCoords>,
-    mut game: ResMut<Game>,
-    mut shapes: Query<&mut Transform, With<HexShape>>
+    game: ResMut<Game>,
+    mut selected_shape: Query<&mut Transform, (With<HexShape>, With<Selected>)>
 ) {
-    if game.dragging {
-        if let Some(selected_id) = game.selected_id {
-            let parent_global_transform = shapes.get_mut(selected_id);
-            if let Ok(mut shape_transform) = parent_global_transform {
-                shape_transform.translation = Vec3 { x: game.mouse_offset.x + world_cursor.0.x, y: game.mouse_offset.y + world_cursor.0.y, z: 0. };
-            }
-        }
-    }
-
-    if game.move_to_original {
-        game.move_to_original = false;
-        if let Some(selected_id) = game.selected_id {
-            let parent_global_transform = shapes.get_mut(selected_id);
-            if let Ok(mut shape_transform) = parent_global_transform {
-                shape_transform.translation = game.original_transform.translation;
-                shape_transform.rotation = game.original_transform.rotation;
-            }
-        }
+    if let Ok(mut shape_transform) = selected_shape.get_single_mut() {
+        shape_transform.translation = Vec3 { 
+            x: game.mouse_offset.x + world_cursor.0.x, 
+            y: game.mouse_offset.y + world_cursor.0.y, 
+            z: SELECTED_Z 
+        };
     }
 }
 
 
 fn put_shape(
-    world_cursor: Res<CursorWorldCoords>, 
     btn: Res<Input<MouseButton>>, 
-    mut game: ResMut<Game>,
-    free_hexes: Query<(&Parent, &GlobalTransform), With<Collider>>,
-    shapes: Query<(&Transform, &Children), With<HexShape>>,
+    game: ResMut<Game>,
+    not_selected_hexagons: Query<&GlobalTransform, (With<Collider>, Without<Selected>)>,
+    selected_hexagons: Query<(Entity, &GlobalTransform), (With<Collider>, With<Selected>)>,
+    mut selected_shape: Query<(Entity, &mut Transform), (With<HexShape>, With<Selected>)>,
+    mut commands: Commands,
 ) {
-    if game.dragging && !btn.pressed(MouseButton::Left) {
-
-        println!("Trying to put piece");
-        if let Some(selected_id) = game.selected_id {
-            println!("Selected: {:?}", selected_id);
-            if let Ok(selected_shape) = shapes.get(selected_id) {
-                for child in selected_shape.1 {
-                    if let Ok(child_hex) = free_hexes.get(*child) {
-                        // selected_hex_transform.
-                        for (hex_parent, hex_transform) in free_hexes.iter() {
-                            
-                            println!("Check if same piece: left: {:?}, right: {:?}", hex_parent.get(), selected_id);
-                            if hex_parent.get() == selected_id {
-                                continue;
-                            }
-
-                            println!("Check collision with: {:?}", hex_transform.translation());
-                            if hex_collision_with_hex(child_hex.1.translation(), hex_transform.translation()) {
-                                println!("Move to original");
-                                game.move_to_original = true;
-                            }   
-                        }
-                    }
+    if !btn.pressed(MouseButton::Left) {
+        if let Ok(mut shape) = selected_shape.get_single_mut() {
+            for hex1 in selected_hexagons.iter() {
+                for hex2 in not_selected_hexagons.iter() {
+                    if hex_collision_with_hex(hex1.1.translation(), hex2.translation()) {
+                        shape.1.translation = game.original_transform.translation;
+                        shape.1.rotation = game.original_transform.rotation;
+                    }   
                 }
-            }
-        }
 
-        game.dragging = false;
+                shape.1.translation.z = DEFAULT_Z;
+
+                commands.entity(hex1.0).remove::<Selected>();                
+            }
+            commands.entity(shape.0).remove::<Selected>();  
+        }
     }
 }
 
