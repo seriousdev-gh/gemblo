@@ -1,9 +1,22 @@
+#![feature(more_float_constants)]
+
+mod hex;
+use std::f32::consts::SQRT_3;
+
 use bevy::render::camera::ScalingMode;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use hex::Hex;
 
 #[derive(Resource, Default)]
 struct CursorWorldCoords(Vec2);
+
+
+#[derive(Component)]
+struct Board;
+
+#[derive(Component)]
+struct HexGrid;
 
 #[derive(Component)]
 struct Collider;
@@ -26,32 +39,35 @@ const SELECTED_Z: f32 = 1.0001;
 impl HexBundle {
     fn new(location: Vec2, texture: &Handle<Image>) -> HexBundle {
         HexBundle {
-                sprite_bundle: SpriteBundle {
-                    sprite: Sprite {
-                        color: Color::rgba(0.0, 1.0, 0.0, 1.0),
-                        ..default()
-                    },
-                    texture: texture.clone(),
-                    transform: Transform::from_xyz(location.x, location.y, 0.).with_scale(Vec3 {x: HEX_SCALE, y: HEX_SCALE, z: 1.0 }),
-                    ..default()
-                },
+                sprite_bundle: build_hex_sprite(location, texture, Color::rgba(0.0, 1.0, 0.0, 1.0)),
                 collider: Collider
             }
     }
 }
 
-const HEX_SCALE: f32 = 0.5;
+fn build_hex_sprite(location: Vec2, texture: &Handle<Image>, color: Color) -> SpriteBundle {
+    SpriteBundle {
+        sprite: Sprite {
+            color,
+            ..default()
+        },
+        texture: texture.clone(),
+        transform: Transform::from_xyz(location.x, location.y, 0.).with_scale(Vec3 {x: HEX_SCALE, y: HEX_SCALE, z: 1.0 }),
+        ..default()
+    }
+}
+
+const HEX_SCALE: f32 = 0.25;
 const HEX_REAL_WIDTH_IN_PIXELS: f32 = 128.0;
 const HEX_WIDTH: f32 = HEX_REAL_WIDTH_IN_PIXELS * HEX_SCALE;
 const HEX_RADIUS: f32 = HEX_WIDTH / 2.0;
 
-const SQRT3:f32 = 1.732_050_8;
-const HEX_UP:Vec2       = Vec2 { x: 0.0, y: HEX_WIDTH * SQRT3 / 2.0 };
-const HEX_DOWN:Vec2     = Vec2 { x: 0.0, y: -HEX_WIDTH * SQRT3 / 2.0 };
-const HEX_UP_LEFT:Vec2  = Vec2 { x: -HEX_WIDTH * 3.0 / 4.0 , y: HEX_WIDTH * SQRT3 / 4.0 };
-const HEX_UP_RIGHT:Vec2 = Vec2 { x: HEX_WIDTH * 3.0 / 4.0, y: HEX_WIDTH * SQRT3 / 4.0 };
-const HEX_DOWN_LEFT:Vec2  = Vec2 { x: -HEX_WIDTH * 3.0 / 4.0, y: -HEX_WIDTH * SQRT3 / 4.0 };
-const HEX_DOWN_RIGHT:Vec2 = Vec2 { x: HEX_WIDTH * 3.0 / 4.0, y: -HEX_WIDTH * SQRT3 / 4.0 };
+const HEX_UP:Vec2       = Vec2 { x: 0.0, y: HEX_WIDTH * SQRT_3 / 2.0 };
+const HEX_DOWN:Vec2     = Vec2 { x: 0.0, y: -HEX_WIDTH * SQRT_3 / 2.0 };
+const HEX_UP_LEFT:Vec2  = Vec2 { x: -HEX_WIDTH * 3.0 / 4.0 , y: HEX_WIDTH * SQRT_3 / 4.0 };
+const HEX_UP_RIGHT:Vec2 = Vec2 { x: HEX_WIDTH * 3.0 / 4.0, y: HEX_WIDTH * SQRT_3 / 4.0 };
+const HEX_DOWN_LEFT:Vec2  = Vec2 { x: -HEX_WIDTH * 3.0 / 4.0, y: -HEX_WIDTH * SQRT_3 / 4.0 };
+const HEX_DOWN_RIGHT:Vec2 = Vec2 { x: HEX_WIDTH * 3.0 / 4.0, y: -HEX_WIDTH * SQRT_3 / 4.0 };
 
 enum Cell {
     Empty,
@@ -68,6 +84,8 @@ struct Game {
     original_transform: Transform,
     mouse_offset: Vec2
 }
+
+const BOARD_SECTOR: [i32; 10] = [11, 10, 10, 9, 9, 8, 8, 6, 4, 2];
 
 fn main() {
     App::new()
@@ -98,7 +116,7 @@ fn setup(
 
     commands.spawn((
         HexShape,
-        SpatialBundle { transform: Transform::from_xyz(0., 0., 0.), ..default() }
+        SpatialBundle { transform: Transform::from_xyz(HEX_WIDTH * 15., 0., 0.), ..default() }
     )).with_children(|parent| {
         parent.spawn(HexBundle::new(Vec2::ZERO, hex_texture_handle));
         parent.spawn(HexBundle::new(HEX_UP + HEX_UP_RIGHT, hex_texture_handle));
@@ -110,7 +128,7 @@ fn setup(
     
     commands.spawn((
         HexShape,
-        SpatialBundle { transform: Transform::from_xyz(256., 0., 0.), ..default() }
+        SpatialBundle { transform: Transform::from_xyz(HEX_WIDTH * 15., 256., 0.), ..default() }
     )).with_children(|parent| {
         parent.spawn(HexBundle::new(HEX_UP, hex_texture_handle));
         parent.spawn(HexBundle::new(Vec2::ZERO, hex_texture_handle));
@@ -120,12 +138,53 @@ fn setup(
     
     commands.spawn((
         HexShape,
-        SpatialBundle { transform: Transform::from_xyz(-256., 0., 0.), ..default() }
+        SpatialBundle { transform: Transform::from_xyz(HEX_WIDTH * 15., -256., 0.), ..default() }
     )).with_children(|parent| {
         parent.spawn(HexBundle::new(HEX_UP_LEFT, hex_texture_handle));
         parent.spawn(HexBundle::new(Vec2::ZERO, hex_texture_handle));
         parent.spawn(HexBundle::new(HEX_DOWN_LEFT, hex_texture_handle));
     });
+
+    commands.spawn((Board, SpatialBundle::default())).with_children(|parent| {
+
+        let mut locations: Vec<Vec2> = Vec::new();
+        locations.push(hex_to_pixel(Hex { q: 0, r: 0 }));
+
+        generate_sector_locations(&mut locations, &hex::Rotation::Rot0);
+        generate_sector_locations(&mut locations, &hex::Rotation::Rot60Cw);
+        generate_sector_locations(&mut locations, &hex::Rotation::Rot120Cw);
+        generate_sector_locations(&mut locations, &hex::Rotation::Rot180);
+        generate_sector_locations(&mut locations, &hex::Rotation::Rot60Ccw);
+        generate_sector_locations(&mut locations, &hex::Rotation::Rot120Ccw);
+        
+
+        for location in locations {
+            parent.spawn(
+                (
+                    build_hex_sprite(location, hex_texture_handle, Color::rgba(1.0, 1.0, 1.0, 1.0)),
+                     HexGrid
+                    )
+            );
+        }
+
+    });
+}
+
+fn generate_sector_locations(locations: &mut Vec<Vec2>, rotation: &hex::Rotation)  {
+
+    for q in 0..10 {
+        for r in 0..BOARD_SECTOR[q] {
+            locations.push(hex_to_pixel(Hex { q: q as i32 + 1, r }.rotate(rotation)))
+        }
+    }
+}
+
+
+fn hex_to_pixel(hex: Hex) -> Vec2 {
+    Vec2 { 
+        x: HEX_RADIUS * (3./2. * hex.q as f32),
+        y: HEX_RADIUS * (SQRT_3/2. * hex.q as f32  + SQRT_3 * hex.r as f32)
+    }
 }
 
 fn pickup_shape(
