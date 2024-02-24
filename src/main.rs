@@ -3,6 +3,7 @@
 mod hex;
 use std::f32::consts::SQRT_3;
 
+use bevy::input::mouse::MouseWheel;
 use bevy::render::camera::ScalingMode;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -19,7 +20,7 @@ struct Board;
 struct BoardHex;
 
 #[derive(Component)]
-struct Collider;
+struct Selectable;
 
 #[derive(Component)]
 struct Selected;
@@ -27,25 +28,17 @@ struct Selected;
 #[derive(Component)]
 struct HexShape;
 
-#[derive(Bundle)]
-struct HexBundle {
-    sprite_bundle: SpriteBundle,
-    collider: Collider,
-}
-
 const DEFAULT_Z: f32 = 1.0;
 const SELECTED_Z: f32 = 1.0001;
 
-impl HexBundle {
-    fn new(location: Vec2, texture: &Handle<Image>) -> HexBundle {
-        HexBundle {
-            sprite_bundle: build_hex_sprite(location, texture, Color::rgba(0.0, 1.0, 0.0, 1.0)),
-            collider: Collider
-        }
-    }
+fn build_selectable_hex(location: Vec2, texture: &Handle<Image>, color: Color) -> (SpriteBundle, Selectable) {
+    (
+        build_hex(location, texture, color),
+        Selectable
+    )
 }
 
-fn build_hex_sprite(location: Vec2, texture: &Handle<Image>, color: Color) -> SpriteBundle {
+fn build_hex(location: Vec2, texture: &Handle<Image>, color: Color) -> SpriteBundle {
     SpriteBundle {
         sprite: Sprite {
             color,
@@ -101,7 +94,7 @@ fn main() {
         .insert_resource(Game { ..default() })
         .insert_resource(CursorWorldCoords { ..default() })
         .add_systems(Startup, setup)
-        .add_systems(Update, (my_cursor_system, pickup_shape, move_shape, put_shape, board_system))
+        .add_systems(Update, (world_cursor_system, pickup_shape, move_shape, put_shape, board_system))
         .run();
 }
 
@@ -120,11 +113,11 @@ fn setup(
         HexShape,
         SpatialBundle { transform: Transform::from_xyz(HEX_WIDTH * 15., 0., 0.), ..default() }
     )).with_children(|parent| {
-        parent.spawn(HexBundle::new(Vec2::ZERO, hex_texture_handle));
-        parent.spawn(HexBundle::new(HEX_UP + HEX_UP_RIGHT, hex_texture_handle));
-        parent.spawn(HexBundle::new(HEX_UP, hex_texture_handle));
-        parent.spawn(HexBundle::new(HEX_DOWN, hex_texture_handle));
-        parent.spawn(HexBundle::new(HEX_DOWN + HEX_DOWN_LEFT, hex_texture_handle));
+        parent.spawn(build_selectable_hex(Vec2::ZERO, hex_texture_handle, Color::GREEN));
+        parent.spawn(build_selectable_hex(HEX_UP + HEX_UP_RIGHT, hex_texture_handle, Color::GREEN));
+        parent.spawn(build_selectable_hex(HEX_UP, hex_texture_handle, Color::GREEN));
+        parent.spawn(build_selectable_hex(HEX_DOWN, hex_texture_handle, Color::GREEN));
+        parent.spawn(build_selectable_hex(HEX_DOWN + HEX_DOWN_LEFT, hex_texture_handle, Color::GREEN));
     });
 
 
@@ -132,9 +125,9 @@ fn setup(
         HexShape,
         SpatialBundle { transform: Transform::from_xyz(HEX_WIDTH * 15., 256., 0.), ..default() }
     )).with_children(|parent| {
-        parent.spawn(HexBundle::new(HEX_UP, hex_texture_handle));
-        parent.spawn(HexBundle::new(Vec2::ZERO, hex_texture_handle));
-        parent.spawn(HexBundle::new(HEX_DOWN, hex_texture_handle));
+        parent.spawn(build_selectable_hex(HEX_UP, hex_texture_handle, Color::GREEN));
+        parent.spawn(build_selectable_hex(Vec2::ZERO, hex_texture_handle, Color::GREEN));
+        parent.spawn(build_selectable_hex(HEX_DOWN, hex_texture_handle, Color::GREEN));
     });
 
 
@@ -142,9 +135,9 @@ fn setup(
         HexShape,
         SpatialBundle { transform: Transform::from_xyz(HEX_WIDTH * 15., -256., 0.), ..default() }
     )).with_children(|parent| {
-        parent.spawn(HexBundle::new(HEX_UP_LEFT, hex_texture_handle));
-        parent.spawn(HexBundle::new(Vec2::ZERO, hex_texture_handle));
-        parent.spawn(HexBundle::new(HEX_DOWN_LEFT, hex_texture_handle));
+        parent.spawn(build_selectable_hex(HEX_UP_LEFT, hex_texture_handle, Color::GREEN));
+        parent.spawn(build_selectable_hex(Vec2::ZERO, hex_texture_handle, Color::GREEN));
+        parent.spawn(build_selectable_hex(HEX_DOWN_LEFT, hex_texture_handle, Color::GREEN));
     });
 
     fill_board(&mut game.board);
@@ -154,7 +147,7 @@ fn setup(
             let location = hex_to_pixel(hex);
             parent.spawn(
                 (
-                    build_hex_sprite(location, hex_texture_handle, Color::rgba(1.0, 1.0, 1.0, 1.0)),
+                    build_hex(location, hex_texture_handle, Color::WHITE),
                     BoardHex,
                     *hex
                 )
@@ -198,36 +191,59 @@ fn pickup_shape(
     world_cursor: Res<CursorWorldCoords>,
     btn: Res<ButtonInput<MouseButton>>,
     mut game: ResMut<Game>,
-    hexagons: Query<(&Parent, &GlobalTransform), With<Collider>>,
+    hexagons: Query<(&Parent, &GlobalTransform), With<Selectable>>,
     shapes: Query<(&Transform, &Children), (With<HexShape>, Without<Selected>)>,
     selected_shape: Query<&Transform, (With<HexShape>, With<Selected>)>,
     mut commands: Commands,
 ) {
-    if selected_shape.is_empty() && btn.just_pressed(MouseButton::Left) {
-        for (parent, child_transform) in hexagons.iter() {
-            if hex_collision_with_point(world_cursor.0, child_transform.translation()) {
-                let parent_shape_result = shapes.get(parent.get());
-                if let Ok(parent_shape) = parent_shape_result {
-                    game.original_transform = *parent_shape.0;
-                    game.mouse_offset = parent_shape.0.translation.xy() - world_cursor.0;
+    if !selected_shape.is_empty() || !btn.just_pressed(MouseButton::Left) {
+        return;
+    }
 
-                    commands.entity(parent.get()).insert(Selected);
-                    for child in parent_shape.1.iter() {
-                        commands.entity(*child).insert(Selected);
-                    }
+    for (parent, child_transform) in hexagons.iter() {
+        if hex_collision_with_point(world_cursor.0, child_transform.translation()) {
+            let parent_shape_result = shapes.get(parent.get());
+            if let Ok(parent_shape) = parent_shape_result {
+                game.original_transform = *parent_shape.0;
+                game.mouse_offset = parent_shape.0.translation.xy() - world_cursor.0;
+
+                commands.entity(parent.get()).insert(Selected);
+                for child in parent_shape.1.iter() {
+                    commands.entity(*child).insert(Selected);
                 }
-                return;
             }
+            return;
         }
     }
 }
 
 fn move_shape(
+    mut scroll_evr: EventReader<MouseWheel>,
     world_cursor: Res<CursorWorldCoords>,
-    game: ResMut<Game>,
+    mut game: ResMut<Game>,
     mut selected_shape: Query<&mut Transform, (With<HexShape>, With<Selected>)>
 ) {
+    use bevy::input::mouse::MouseScrollUnit;
     if let Ok(mut shape_transform) = selected_shape.get_single_mut() {
+        for ev in scroll_evr.read() {
+            match ev.unit {
+                MouseScrollUnit::Line => {
+                    let mut angle = 0.0_f32;
+                    if ev.y > 0.0 {
+                        angle = 60.0_f32.to_radians();
+                    } else if ev.y < 0.0 {
+                        angle = -60.0_f32.to_radians();
+                    }
+
+                    game.mouse_offset = Quat::from_rotation_z(angle).mul_vec3(game.mouse_offset.extend(0.0)).xy();
+                    shape_transform.rotate(Quat::from_rotation_z(angle));
+                }
+                MouseScrollUnit::Pixel => {
+                    todo!();
+                }
+            }
+        }
+
         shape_transform.translation = Vec3 {
             x: game.mouse_offset.x + world_cursor.0.x,
             y: game.mouse_offset.y + world_cursor.0.y,
@@ -239,7 +255,7 @@ fn move_shape(
 fn put_shape(
     btn: Res<ButtonInput<MouseButton>>,
     mut game: ResMut<Game>,
-    selected_hexagons: Query<(Entity, &GlobalTransform), (With<Collider>, With<Selected>)>,
+    selected_hexagons: Query<(Entity, &GlobalTransform), (With<Selectable>, With<Selected>)>,
     mut selected_shape: Query<(Entity, &mut Transform), (With<HexShape>, With<Selected>)>,
     mut commands: Commands,
 ) {
@@ -255,6 +271,7 @@ fn put_shape(
 
         match shape_status {
             ShapeOnBoard::Full => {
+                println!("Full");
                 for hex in rounded_shape_hexes {
                     game.board.insert(hex, Cell::Player1);
                 }
@@ -264,11 +281,12 @@ fn put_shape(
                 commands.entity(shape.0).despawn();
             },
             ShapeOnBoard::Partial => {
+                println!("Partial");
                 shape.1.translation = game.original_transform.translation;
                 shape.1.rotation = game.original_transform.rotation;
             },
             ShapeOnBoard::None => {
-
+                println!("None");
             }
         }
 
@@ -286,11 +304,11 @@ enum ShapeOnBoard {
     None
 }
 
-fn shape_contained_on_board(board: &HashMap<Hex, Cell>, shape_axial_positions: &[Hex]) -> ShapeOnBoard {
-    let hexes_on_board = shape_axial_positions.iter().filter(|hex| board.contains_key(hex)).count();
-    if hexes_on_board == shape_axial_positions.len() {
+fn shape_contained_on_board(board: &HashMap<Hex, Cell>, shape_hexes: &[Hex]) -> ShapeOnBoard {
+    let hexes_on_board = shape_hexes.iter().filter(|hex| board.contains_key(hex)).count();
+    if hexes_on_board == shape_hexes.len() {
         ShapeOnBoard::Full
-    } else if hexes_on_board > 0 && hexes_on_board < shape_axial_positions.len() {
+    } else if hexes_on_board > 0 && hexes_on_board < shape_hexes.len() {
         ShapeOnBoard::Partial
     } else {
         ShapeOnBoard::None
@@ -300,7 +318,7 @@ fn shape_contained_on_board(board: &HashMap<Hex, Cell>, shape_axial_positions: &
 fn board_system(
     mut board_hexes: Query<(&mut Sprite, &Hex), With<BoardHex>>,
     game: Res<Game>,
-    selected_hexagons: Query<&GlobalTransform, (With<Collider>, With<Selected>)>,
+    selected_hexagons: Query<&GlobalTransform, (With<Selectable>, With<Selected>)>,
 ) {
     for (mut sprite, hex) in &mut board_hexes {
         if !selected_hexagons.is_empty()  {
@@ -335,7 +353,7 @@ fn hex_collision_with_hex(point1: Vec3, point2: Vec3) -> bool{
     point1.distance_squared(point2) <= HEX_RADIUS * HEX_RADIUS * 2.0
 }
 
-fn my_cursor_system(
+fn world_cursor_system(
     mut world_cursor: ResMut<CursorWorldCoords>,
     q_window: Query<&Window, With<PrimaryWindow>>,
     q_camera: Query<(&Camera, &GlobalTransform)>,
