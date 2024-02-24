@@ -14,7 +14,7 @@ use std::collections::HashMap;
 struct CursorWorldCoords(Vec2);
 
 #[derive(Component)]
-struct Board;
+struct BoardComponent;
 
 #[derive(Component)]
 struct BoardHex;
@@ -30,6 +30,13 @@ struct HexShape;
 
 const DEFAULT_Z: f32 = 1.0;
 const SELECTED_Z: f32 = 1.0001;
+
+type Board = HashMap<Hex, Cell>;
+
+const NEIGHBOURS: [Hex; 6] = [Hex { q:  0, r: 1 }, Hex { q: 1, r:   0 }, Hex { q:  0, r:  -1 },
+                              Hex { q: -1, r: 0 }, Hex { q:  1, r: -1 }, Hex { q:  -1, r:  1 }];
+const DIAGONAL_NEIGHBOURS: [Hex; 6] = [Hex { q:  1, r: 1 }, Hex { q: -1, r:  2 }, Hex { q: -2, r:  1 },
+                                       Hex { q: -1, r: 1 }, Hex { q:  1, r: -2 }, Hex { q:  2, r: -1 }];
 
 fn build_selectable_hex(location: Vec2, texture: &Handle<Image>, color: Color) -> (SpriteBundle, Selectable) {
     (
@@ -62,21 +69,21 @@ const HEX_UP_RIGHT:Vec2 = Vec2 { x: HEX_WIDTH * 3.0 / 4.0, y: HEX_WIDTH * SQRT_3
 const HEX_DOWN_LEFT:Vec2  = Vec2 { x: -HEX_WIDTH * 3.0 / 4.0, y: -HEX_WIDTH * SQRT_3 / 4.0 };
 const HEX_DOWN_RIGHT:Vec2 = Vec2 { x: HEX_WIDTH * 3.0 / 4.0, y: -HEX_WIDTH * SQRT_3 / 4.0 };
 
+#[derive(PartialEq, Default, Debug)]
 enum Cell {
+    #[default]
     Empty,
-    Player1,
-    Player2,
-    Player3,
-    Player4,
-    Player5,
-    Player6
+    Player(u32),
+    PlayerStart(u32)
 }
 
 #[derive(Resource, Default)]
 struct Game {
     original_transform: Transform,
     mouse_offset: Vec2,
-    board: HashMap<Hex, Cell>
+    board: Board,
+    player_count: u32,
+    current_player: u32
 }
 
 const BOARD_SECTOR: [i32; 10] = [11, 10, 10, 9, 9, 8, 8, 6, 4, 2];
@@ -91,10 +98,11 @@ fn main() {
             }),
             ..default()
         }))
-        .insert_resource(Game { ..default() })
+        .insert_resource(Game { player_count: 2, ..default() })
         .insert_resource(CursorWorldCoords { ..default() })
         .add_systems(Startup, setup)
-        .add_systems(Update, (world_cursor_system, pickup_shape, move_shape, put_shape, board_system))
+        .add_systems(Update, (world_cursor_system, pickup_shape, board_system))
+        .add_systems(Update, (move_shape, put_shape).chain())
         .run();
 }
 
@@ -142,7 +150,7 @@ fn setup(
 
     fill_board(&mut game.board);
 
-    commands.spawn((Board, SpatialBundle::default())).with_children(|parent| {
+    commands.spawn((BoardComponent, SpatialBundle::default())).with_children(|parent| {
         for (hex, _) in game.board.iter() {
             let location = hex_to_pixel(hex);
             parent.spawn(
@@ -156,7 +164,7 @@ fn setup(
     });
 }
 
-fn fill_board(board: &mut HashMap<Hex, Cell>) {
+fn fill_board(board: &mut Board) {
     board.insert(Hex { q: 0, r: 0 }, Cell::Empty);
     fill_board_sector(board, hex::Rotation::Rot0);
     fill_board_sector(board, hex::Rotation::Rot60Cw);
@@ -164,9 +172,11 @@ fn fill_board(board: &mut HashMap<Hex, Cell>) {
     fill_board_sector(board, hex::Rotation::Rot180);
     fill_board_sector(board, hex::Rotation::Rot60Ccw);
     fill_board_sector(board, hex::Rotation::Rot120Ccw);
+
+    board.insert(Hex { q: 7, r: 7 }, Cell::PlayerStart(0));
 }
 
-fn fill_board_sector(board: &mut HashMap<Hex, Cell>, rotation: hex::Rotation) {
+fn fill_board_sector(board: &mut Board, rotation: hex::Rotation) {
     for q in 0..10 {
         for r in 0..BOARD_SECTOR[q] {
             board.insert(Hex { q: q as i32 + 1, r }.rotate(rotation), Cell::Empty);
@@ -259,60 +269,90 @@ fn put_shape(
     mut selected_shape: Query<(Entity, &mut Transform), (With<HexShape>, With<Selected>)>,
     mut commands: Commands,
 ) {
-    if btn.pressed(MouseButton::Left) {
+    if !btn.just_released(MouseButton::Left) {
         return;
     }
 
-    if let Ok(mut shape) = selected_shape.get_single_mut() {
-        let rounded_shape_hexes: Vec<Hex> = selected_hexagons.iter().map(|f|
-            pixel_to_hex(f.1.translation().xy())
+    if let Ok((shape_entity, mut shape_transform)) = selected_shape.get_single_mut() {
+        let rounded_shape_hexes: Vec<Hex> = selected_hexagons.iter().map(|(_, transform)|
+            pixel_to_hex(transform.translation().xy())
         ).collect();
-        let shape_status = shape_contained_on_board(&game.board, &rounded_shape_hexes);
+        let shape_status = action_when_shape_placed(&game.board, &rounded_shape_hexes, game.current_player);
 
         match shape_status {
-            ShapeOnBoard::Full => {
-                println!("Full");
+            PutShapeAction::PutOnBoard => {
+                let current_player = game.current_player;
                 for hex in rounded_shape_hexes {
-                    game.board.insert(hex, Cell::Player1);
+                    game.board.insert(hex, Cell::Player(current_player));
                 }
-                for hex1 in selected_hexagons.iter() {
-                    commands.entity(hex1.0).despawn();
+                for (shape_hex, _) in selected_hexagons.iter() {
+                    commands.entity(shape_hex).despawn();
                 }
-                commands.entity(shape.0).despawn();
+                commands.entity(shape_entity).despawn();
             },
-            ShapeOnBoard::Partial => {
-                println!("Partial");
-                shape.1.translation = game.original_transform.translation;
-                shape.1.rotation = game.original_transform.rotation;
+            PutShapeAction::ReturnToOrigin => {
+                shape_transform.translation = game.original_transform.translation;
+                shape_transform.rotation = game.original_transform.rotation;
             },
-            ShapeOnBoard::None => {
-                println!("None");
+            PutShapeAction::PutOutsideBoard => {
             }
         }
 
-        for hex1 in selected_hexagons.iter() {
-            shape.1.translation.z = DEFAULT_Z;
-            commands.entity(hex1.0).remove::<Selected>();
+        for (shape_hex, _) in selected_hexagons.iter() {
+            shape_transform.translation.z = DEFAULT_Z;
+            commands.entity(shape_hex).remove::<Selected>();
         }
-        commands.entity(shape.0).remove::<Selected>();
+        commands.entity(shape_entity).remove::<Selected>();
     }
 }
 
-enum ShapeOnBoard {
-    Full,
-    Partial,
-    None
+enum PutShapeAction {
+    PutOnBoard,
+    ReturnToOrigin,
+    PutOutsideBoard
 }
 
-fn shape_contained_on_board(board: &HashMap<Hex, Cell>, shape_hexes: &[Hex]) -> ShapeOnBoard {
+fn action_when_shape_placed(board: &Board, shape_hexes: &[Hex], current_player: u32) -> PutShapeAction {
     let hexes_on_board = shape_hexes.iter().filter(|hex| board.contains_key(hex)).count();
     if hexes_on_board == shape_hexes.len() {
-        ShapeOnBoard::Full
+        if shape_can_be_placed_on_board(board, shape_hexes, current_player) {
+            PutShapeAction::PutOnBoard
+        } else {
+            PutShapeAction::ReturnToOrigin
+        }
     } else if hexes_on_board > 0 && hexes_on_board < shape_hexes.len() {
-        ShapeOnBoard::Partial
+        PutShapeAction::ReturnToOrigin
     } else {
-        ShapeOnBoard::None
+        PutShapeAction::PutOutsideBoard
     }
+}
+
+fn shape_can_be_placed_on_board(board: &Board, shape_hexes: &[Hex], current_player: u32) -> bool {
+    let current_player_cell = Cell::Player(current_player);
+
+    for hex in shape_hexes {
+        // always can place on own starting square
+        match board.get(hex) {
+            Some(Cell::PlayerStart(index)) if *index == current_player => return true,
+            _ => ()
+        }
+
+        // can't place when have direct neighbours
+        if NEIGHBOURS.iter().any(|n|
+            *board.get(&hex.add(n)).unwrap_or(&Cell::Empty) == current_player_cell
+        ) {
+            return false;
+        }
+
+        // can place when diagonals contains own squares
+        if DIAGONAL_NEIGHBOURS.iter().any(|n|
+            *board.get(&hex.add(n)).unwrap_or(&Cell::Empty) == current_player_cell
+        ) {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn board_system(
@@ -321,7 +361,7 @@ fn board_system(
     selected_hexagons: Query<&GlobalTransform, (With<Selectable>, With<Selected>)>,
 ) {
     for (mut sprite, hex) in &mut board_hexes {
-        if !selected_hexagons.is_empty()  {
+        if !selected_hexagons.is_empty() {
             let mut selected = false;
             for hex_position in selected_hexagons.iter() {
                 let selected_hex = pixel_to_hex(hex_position.translation().xy());
@@ -338,8 +378,20 @@ fn board_system(
         if let Some(cell) = game.board.get(hex) {
             match cell {
                 Cell::Empty => sprite.color = Color::WHITE,
-                Cell::Player1 => sprite.color = Color::GREEN,
-                _ => todo!(),
+                Cell::Player(i) => {
+                    sprite.color =
+                        match i {
+                            0 => Color::GREEN,
+                            _ => Color::PINK
+                        }
+                },
+                Cell::PlayerStart(i) => {
+                    sprite.color =
+                    match i {
+                        0 => Color::DARK_GREEN,
+                        _ => Color::VIOLET
+                    }
+                }
             };
         }
     }
@@ -347,10 +399,6 @@ fn board_system(
 
 fn hex_collision_with_point(point: Vec2, translation: Vec3) -> bool{
     translation.xy().distance_squared(point) <= HEX_RADIUS * HEX_RADIUS
-}
-
-fn hex_collision_with_hex(point1: Vec3, point2: Vec3) -> bool{
-    point1.distance_squared(point2) <= HEX_RADIUS * HEX_RADIUS * 2.0
 }
 
 fn world_cursor_system(

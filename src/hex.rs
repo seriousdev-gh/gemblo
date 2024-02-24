@@ -2,7 +2,7 @@ use bevy::ecs::component::Component;
 
 // info about hexagons https://www.redblobgames.com/grids/hexagons/
 
-#[derive(PartialEq, Eq, Hash, Component, Clone, Copy)]
+#[derive(PartialEq, Eq, Hash, Component, Clone, Copy, Debug)]
 pub struct Hex {
     pub q: i32,
     pub r: i32
@@ -27,6 +27,10 @@ impl Hex {
         }
     }
 
+    pub fn add(&self, rhs: &Hex) -> Hex {
+        Self { q: self.q + rhs.q, r: self.r + rhs.r }
+    }
+
     pub fn rotate(&self, rotation: Rotation) -> Self {
         self.to_cube().rotate(rotation).to_hex()
     }
@@ -36,6 +40,14 @@ impl Hex {
         HexCube::from_fraction(q, r, s).to_hex()
     }
 }
+
+// impl std::ops::Add<&Hex> for Hex {
+//     type Output = Hex;
+
+//     fn add(&self, rhs: &Hex) -> Hex {
+//         Self { q: self.q + rhs.q, r: self.r + rhs.r }
+//     }
+// }
 
 struct HexCube {
     pub q: i32,
