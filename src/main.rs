@@ -231,7 +231,8 @@ fn move_shape(
     mut scroll_evr: EventReader<MouseWheel>,
     world_cursor: Res<CursorWorldCoords>,
     mut game: ResMut<Game>,
-    mut selected_shape: Query<&mut Transform, (With<HexShape>, With<Selected>)>
+    mut selected_shape: Query<&mut Transform, (With<HexShape>, With<Selected>)>,
+    mut selected_hexagons: Query<(&GlobalTransform, &mut Sprite), (With<Selectable>, With<Selected>)>,
 ) {
     use bevy::input::mouse::MouseScrollUnit;
     if let Ok(mut shape_transform) = selected_shape.get_single_mut() {
@@ -260,12 +261,27 @@ fn move_shape(
             z: SELECTED_Z
         };
     }
+
+    if !selected_hexagons.is_empty() {
+        let rounded_shape_hexes: Vec<Hex> = selected_hexagons.iter().map(|(transform, _)|
+            pixel_to_hex(transform.translation().xy())
+        ).collect();
+        let shape_status = action_when_shape_placed(&game.board, &rounded_shape_hexes, game.current_player);
+        for (_, mut sprite) in selected_hexagons.iter_mut() {
+            let alpha = match shape_status {
+                PutShapeAction::ReturnToOrigin => 0.8,
+                _ => 1.0
+            };
+            sprite.color = sprite.color.with_a(alpha);
+        }
+    }
+
 }
 
 fn put_shape(
     btn: Res<ButtonInput<MouseButton>>,
     mut game: ResMut<Game>,
-    selected_hexagons: Query<(Entity, &GlobalTransform), (With<Selectable>, With<Selected>)>,
+    mut selected_hexagons: Query<(Entity, &GlobalTransform, &mut Sprite), (With<Selectable>, With<Selected>)>,
     mut selected_shape: Query<(Entity, &mut Transform), (With<HexShape>, With<Selected>)>,
     mut commands: Commands,
 ) {
@@ -274,7 +290,7 @@ fn put_shape(
     }
 
     if let Ok((shape_entity, mut shape_transform)) = selected_shape.get_single_mut() {
-        let rounded_shape_hexes: Vec<Hex> = selected_hexagons.iter().map(|(_, transform)|
+        let rounded_shape_hexes: Vec<Hex> = selected_hexagons.iter().map(|(_, transform, _)|
             pixel_to_hex(transform.translation().xy())
         ).collect();
         let shape_status = action_when_shape_placed(&game.board, &rounded_shape_hexes, game.current_player);
@@ -285,7 +301,7 @@ fn put_shape(
                 for hex in rounded_shape_hexes {
                     game.board.insert(hex, Cell::Player(current_player));
                 }
-                for (shape_hex, _) in selected_hexagons.iter() {
+                for (shape_hex, _, _) in selected_hexagons.iter() {
                     commands.entity(shape_hex).despawn();
                 }
                 commands.entity(shape_entity).despawn();
@@ -298,7 +314,8 @@ fn put_shape(
             }
         }
 
-        for (shape_hex, _) in selected_hexagons.iter() {
+        for (shape_hex, _, mut sprite) in selected_hexagons.iter_mut() {
+            sprite.color = sprite.color.with_a(1.0);
             shape_transform.translation.z = DEFAULT_Z;
             commands.entity(shape_hex).remove::<Selected>();
         }
