@@ -19,7 +19,7 @@ pub enum Rotation {
 }
 
 impl Hex {
-    fn to_cube(self) -> HexCube {
+    fn to_cube(&self) -> HexCube {
         HexCube {
             q: self.q,
             r: self.r,
@@ -27,11 +27,11 @@ impl Hex {
         }
     }
 
-    pub fn add(self, rhs: &Hex) -> Hex {
+    pub fn add(&self, rhs: &Hex) -> Hex {
         Self { q: self.q + rhs.q, r: self.r + rhs.r }
     }
 
-    pub fn sub(self, rhs: &Hex) -> Hex {
+    pub fn sub(&self, rhs: &Hex) -> Hex {
         Self { q: self.q - rhs.q, r: self.r - rhs.r }
     }
 
