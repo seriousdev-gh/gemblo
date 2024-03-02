@@ -5,6 +5,8 @@ use bevy::render::camera::ScalingMode;
 use bevy::prelude::*;
 use std::collections::HashMap;
 
+use rand::seq::SliceRandom;
+
 use crate::{hex::{Hex, Rotation}, CursorWorldCoords};
 
 #[derive(Component)]
@@ -101,7 +103,8 @@ pub struct GameState {
     mouse_offset: Vec2,
     board: Board,
     player_count: usize,
-    pub current_player: usize
+    pub current_player: usize,
+    drop_audio_handles: Vec<Handle<AudioSource>>
 }
 
 pub struct GamePlugin {
@@ -131,6 +134,14 @@ fn setup(
     commands.spawn(camera_bundle);
 
     let hex_texture_handle = &asset_server.load("hex.png");
+
+    game.drop_audio_handles = vec![
+        asset_server.load("drop1.ogg"),
+        asset_server.load("drop2.ogg"),
+        asset_server.load("drop3.ogg"),
+        asset_server.load("drop4.ogg"),
+        asset_server.load("drop5.ogg")
+    ];
 
     fill_board(&mut game.board);
 
@@ -335,6 +346,14 @@ fn put_shape(
                 }
                 commands.entity(shape_entity).despawn();
                 game.current_player = (game.current_player + 1) % game.player_count;
+
+
+                if let Some(source) = game.drop_audio_handles.choose(&mut rand::thread_rng()) {
+                    commands.spawn(AudioBundle {
+                        source: source.clone(),
+                        settings: PlaybackSettings::DESPAWN
+                    });
+                }
             },
             PutShapeAction::ReturnToOrigin => {
                 shape_transform.translation = game.original_transform.translation;
