@@ -3,15 +3,15 @@
 mod hex;
 mod ui;
 mod game;
+mod menu;
 
 use bevy::prelude::*;
+use bevy::render::camera::ScalingMode;
 use bevy::window::PrimaryWindow;
 
 use crate::ui::ui_plugin;
-use crate::game::GamePlugin;
-
-#[derive(Resource, Default)]
-struct CursorWorldCoords(Vec2);
+use crate::game::game_plugin;
+use crate::menu::menu_plugin;
 
 fn main() {
     App::new()
@@ -23,10 +23,29 @@ fn main() {
             }),
             ..default()
         }))
+        .init_state::<GameState>()
         .insert_resource(CursorWorldCoords { ..default() })
-        .add_plugins((ui_plugin, GamePlugin { player_count: 6 }))
+        .add_plugins((menu_plugin, ui_plugin, game_plugin))
+        .add_systems(Startup, setup)
         .add_systems(Update, world_cursor_system)
         .run();
+}
+
+#[derive(Resource, Default)]
+struct CursorWorldCoords(Vec2);
+
+#[derive(Clone, Copy, Default, Eq, PartialEq, Debug, Hash, States)]
+enum GameState {
+    #[default]
+    Menu,
+    Game,
+}
+
+
+fn setup(mut commands: Commands) {
+    let mut camera_bundle = Camera2dBundle::default();
+    camera_bundle.projection.scaling_mode = ScalingMode::AutoMin { min_width: 1920.0, min_height: 1080.0 };
+    commands.spawn(camera_bundle);
 }
 
 fn world_cursor_system(
@@ -41,5 +60,12 @@ fn world_cursor_system(
         .map(|ray| ray.origin.truncate())
     {
         world_cursor.0 = world_position;
+    }
+}
+
+// Generic system that takes a component as a parameter, and will despawn all entities with that component
+fn despawn_screen<T: Component>(to_despawn: Query<Entity, With<T>>, mut commands: Commands) {
+    for entity in &to_despawn {
+        commands.entity(entity).despawn_recursive();
     }
 }

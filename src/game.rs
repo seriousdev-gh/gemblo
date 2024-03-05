@@ -1,13 +1,42 @@
 use std::f32::consts::SQRT_3;
 
 use bevy::input::mouse::MouseWheel;
-use bevy::render::camera::ScalingMode;
+
 use bevy::prelude::*;
 use std::collections::HashMap;
 
 use rand::seq::SliceRandom;
 
+use crate::GameState;
+use crate::despawn_screen;
 use crate::{hex::{Hex, Rotation}, CursorWorldCoords};
+
+pub fn game_plugin(app: &mut App) {
+    app
+        .add_systems(OnEnter(GameState::Game), setup)
+        .add_systems(Update, (pickup_shape, board_system).run_if(in_state(GameState::Game)))
+        .add_systems(Update, (move_shape, put_shape).chain().run_if(in_state(GameState::Game)))
+        .add_systems(OnExit(GameState::Game), despawn_screen::<OnGameScreen>);
+}
+
+#[derive(Resource, Default)]
+pub struct Game {
+    original_transform: Transform,
+    mouse_offset: Vec2,
+    board: Board,
+    player_count: usize,
+    pub current_player: usize,
+    drop_audio_handles: Vec<Handle<AudioSource>>
+}
+
+impl Game {
+    pub fn new(player_count: usize) -> Self {
+        Self {
+            player_count,
+            ..default()
+        }
+    }
+}
 
 #[derive(Component)]
 struct BoardComponent;
@@ -27,10 +56,25 @@ struct Selected;
 #[derive(Component)]
 struct HexShape;
 
+#[derive(Component)]
+struct OnGameScreen;
+
+#[derive(PartialEq, Default, Debug)]
+enum Cell {
+    #[default]
+    Empty,
+    Player(usize),
+    PlayerStart(usize)
+}
+
+enum PutShapeAction {
+    PutOnBoard,
+    ReturnToOrigin,
+    PutOutsideBoard
+}
+
 const DEFAULT_Z: f32 = 1.0;
 const SELECTED_Z: f32 = 1.0001;
-
-type Board = HashMap<Hex, Cell>;
 
 const NEIGHBOURS: [Hex; 6] = [Hex { q:  0, r: 1 }, Hex { q: 1, r:   0 }, Hex { q:  0, r: -1 },
                               Hex { q: -1, r: 0 }, Hex { q: 1, r:  -1 }, Hex { q: -1, r:  1 }];
@@ -43,96 +87,53 @@ const DIAGONAL_NEIGHBOURS: [(Hex, Hex, Hex); 6] = [
     (Hex { q:  2, r: -1 }, Hex { q:  1, r: -1 }, Hex { q:  1, r:  0 })
 ];
 
-fn build_hex(location: Vec2, texture: &Handle<Image>, color: Color) -> SpriteBundle {
-    SpriteBundle {
-        sprite: Sprite {
-            color,
-            ..default()
-        },
-        texture: texture.clone(),
-        transform: Transform::from_xyz(location.x, location.y, 0.).with_scale(Vec3 {x: HEX_SCALE, y: HEX_SCALE, z: 1.0 }),
-        ..default()
-    }
-}
-
 const MAX_PLAYERS: usize = 6;
 const HEX_SCALE: f32 = 0.25;
 const HEX_REAL_WIDTH_IN_PIXELS: f32 = 128.0;
 const HEX_WIDTH: f32 = HEX_REAL_WIDTH_IN_PIXELS * HEX_SCALE;
 const HEX_RADIUS: f32 = HEX_WIDTH / 2.0;
 
-#[derive(PartialEq, Default, Debug)]
-enum Cell {
-    #[default]
-    Empty,
-    Player(usize),
-    PlayerStart(usize)
-}
-
 const ALL_PIECES: [&[(i32, i32)]; 18] =
-    [
-        // 8 - 5 hexagons
-        &[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)],
-        &[(2, -1), (2, 0), (3, 0), (4, 0), (4, 1)],
-        &[(4, -2), (5, -2), (6, -2), (6, -1), (6, 0)],
-        &[(8, -4), (9, -4), (10, -5), (9, -3), (8, -2)],
-        &[(12, -6), (13, -6), (13, -5), (14, -5), (14, -4)],
-        &[(2, 2), (2, 3), (2, 4), (1, 5), (3, 4)],
-        &[(5, 2), (6, 2), (7, 1), (8, 1), (9, 1)],
-        &[(9, -1), (10, -2), (10, -1), (11, -3), (11, -1)],
+[
+    // 8 - 5 hexagons
+    &[(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)],
+    &[(2, -1), (2, 0), (3, 0), (4, 0), (4, 1)],
+    &[(4, -2), (5, -2), (6, -2), (6, -1), (6, 0)],
+    &[(8, -4), (9, -4), (10, -5), (9, -3), (8, -2)],
+    &[(12, -6), (13, -6), (13, -5), (14, -5), (14, -4)],
+    &[(2, 2), (2, 3), (2, 4), (1, 5), (3, 4)],
+    &[(5, 2), (6, 2), (7, 1), (8, 1), (9, 1)],
+    &[(9, -1), (10, -2), (10, -1), (11, -3), (11, -1)],
 
-        // 5 - 4  hexagons
-        &[(0, 7), (0, 8), (0, 9), (0, 10)],
-        &[(2, 6), (2, 7), (3, 7), (3, 8)],
-        &[(4, 5), (5, 4), (5, 5), (6, 4)],
-        &[(5, 7), (6, 6), (7, 6), (7, 7)],
-        &[(13, -2), (13, -1), (14, -1), (12, 0)],
+    // 5 - 4  hexagons
+    &[(0, 7), (0, 8), (0, 9), (0, 10)],
+    &[(2, 6), (2, 7), (3, 7), (3, 8)],
+    &[(4, 5), (5, 4), (5, 5), (6, 4)],
+    &[(5, 7), (6, 6), (7, 6), (7, 7)],
+    &[(13, -2), (13, -1), (14, -1), (12, 0)],
 
-        // 3 - 3 hexagons
-        &[(8, 3), (9, 3), (8, 4)],
-        &[(11, 2), (11, 3), (10, 4)],
-        &[(14, 1), (14, 2), (14, 3)],
+    // 3 - 3 hexagons
+    &[(8, 3), (9, 3), (8, 4)],
+    &[(11, 2), (11, 3), (10, 4)],
+    &[(14, 1), (14, 2), (14, 3)],
 
-        &[(11, 5), (12, 4)],
-        &[(9, 6 )],
-    ];
-// -2 1
-#[derive(Resource, Default)]
-pub struct GameState {
-    original_transform: Transform,
-    mouse_offset: Vec2,
-    board: Board,
-    player_count: usize,
-    pub current_player: usize,
-    drop_audio_handles: Vec<Handle<AudioSource>>
-}
-
-pub struct GamePlugin {
-    pub player_count: usize
-}
+    &[(11, 5), (12, 4)],
+    &[(9, 6 )],
+];
 
 const BOARD_SECTOR: [i32; 10] = [11, 10, 10, 9, 9, 8, 8, 6, 4, 2];
 
-impl Plugin for GamePlugin {
-    fn build(&self, app: &mut App) {
-        let state = GameState { player_count: self.player_count, ..default() };
-        app
-            .insert_resource(state)
-            .add_systems(Startup, setup)
-            .add_systems(Update, (pickup_shape, board_system))
-            .add_systems(Update, (move_shape, put_shape).chain());
-    }
+type Board = HashMap<Hex, Cell>;
+
+pub fn player_color(player_index: usize) -> Color {
+    Color::hsl(player_index as f32 / MAX_PLAYERS as f32 * 360.0, 1.0, 0.5)
 }
 
 fn setup(
     mut commands: Commands,
-    mut game: ResMut<GameState>,
+    mut game: ResMut<Game>,
     asset_server: Res<AssetServer>
 ) {
-    let mut camera_bundle = Camera2dBundle::default();
-    camera_bundle.projection.scaling_mode = ScalingMode::AutoMin { min_width: 1920.0, min_height: 1080.0 };
-    commands.spawn(camera_bundle);
-
     let hex_texture_handle = &asset_server.load("hex.png");
 
     game.drop_audio_handles = vec![
@@ -145,7 +146,7 @@ fn setup(
 
     fill_board(&mut game.board);
 
-    commands.spawn((BoardComponent, SpatialBundle::default())).with_children(|parent| {
+    commands.spawn((OnGameScreen, BoardComponent, SpatialBundle::default())).with_children(|parent| {
         for (hex, _) in game.board.iter() {
             let location = hex_to_pixel(hex);
             parent.spawn(
@@ -178,6 +179,7 @@ fn spawn_piece(commands: &mut Commands, texture: &Handle<Image>, player_index: u
     let translation = starting_translation + hex_to_pixel(&base).extend(0.0);
 
     commands.spawn((
+        OnGameScreen,
         HexShape,
         PlayerIndex(player_index),
         SpatialBundle { transform: Transform::from_translation(translation), ..default() }
@@ -194,8 +196,16 @@ fn spawn_piece(commands: &mut Commands, texture: &Handle<Image>, player_index: u
     });
 }
 
-pub fn player_color(player_index: usize) -> Color {
-    Color::hsl(player_index as f32 / MAX_PLAYERS as f32 * 360.0, 1.0, 0.5)
+fn build_hex(location: Vec2, texture: &Handle<Image>, color: Color) -> SpriteBundle {
+    SpriteBundle {
+        sprite: Sprite {
+            color,
+            ..default()
+        },
+        texture: texture.clone(),
+        transform: Transform::from_xyz(location.x, location.y, 0.).with_scale(Vec3 {x: HEX_SCALE, y: HEX_SCALE, z: 1.0 }),
+        ..default()
+    }
 }
 
 fn player_color_darken(player_index: usize) -> Color {
@@ -244,7 +254,7 @@ fn pixel_to_hex(pixel: Vec2) -> Hex {
 fn pickup_shape(
     world_cursor: Res<CursorWorldCoords>,
     btn: Res<ButtonInput<MouseButton>>,
-    mut game: ResMut<GameState>,
+    mut game: ResMut<Game>,
     hexagons: Query<(&Parent, &GlobalTransform, &PlayerIndex), With<Selectable>>,
     shapes: Query<(&Transform, &Children), (With<HexShape>, Without<Selected>)>,
     selected_shape: Query<Entity, (With<HexShape>, With<Selected>)>,
@@ -277,23 +287,33 @@ fn pickup_shape(
 
 fn move_shape(
     mut scroll_evr: EventReader<MouseWheel>,
+    btn: Res<ButtonInput<KeyCode>>,
     world_cursor: Res<CursorWorldCoords>,
-    mut game: ResMut<GameState>,
+    mut game: ResMut<Game>,
     mut selected_shape: Query<&mut Transform, (With<HexShape>, With<Selected>)>,
     mut selected_hexagons: Query<(&GlobalTransform, &mut Sprite), (With<Selectable>, With<Selected>)>,
 ) {
     if let Ok(mut shape_transform) = selected_shape.get_single_mut() {
+        let mut angle = 0.0_f32;
+
+        if btn.just_pressed(KeyCode::KeyR) {
+            if btn.pressed(KeyCode::ShiftLeft) {
+                angle = 60.0_f32.to_radians();
+            } else {
+                angle = -60.0_f32.to_radians();
+            }
+        }
+
         for ev in scroll_evr.read() {
-            let mut angle = 0.0_f32;
             if ev.y > 0.0 {
                 angle = 60.0_f32.to_radians();
             } else if ev.y < 0.0 {
                 angle = -60.0_f32.to_radians();
             }
-
-            game.mouse_offset = Quat::from_rotation_z(angle).mul_vec3(game.mouse_offset.extend(0.0)).xy();
-            shape_transform.rotate(Quat::from_rotation_z(angle));
         }
+
+        game.mouse_offset = Quat::from_rotation_z(angle).mul_vec3(game.mouse_offset.extend(0.0)).xy();
+        shape_transform.rotate(Quat::from_rotation_z(angle));
 
         shape_transform.translation = Vec3 {
             x: game.mouse_offset.x + world_cursor.0.x,
@@ -320,7 +340,7 @@ fn move_shape(
 
 fn put_shape(
     btn: Res<ButtonInput<MouseButton>>,
-    mut game: ResMut<GameState>,
+    mut game: ResMut<Game>,
     mut selected_hexagons: Query<(Entity, &GlobalTransform, &mut Sprite), (With<Selectable>, With<Selected>)>,
     mut selected_shape: Query<(Entity, &mut Transform), (With<HexShape>, With<Selected>)>,
     mut commands: Commands,
@@ -370,12 +390,6 @@ fn put_shape(
         }
         commands.entity(shape_entity).remove::<Selected>();
     }
-}
-
-enum PutShapeAction {
-    PutOnBoard,
-    ReturnToOrigin,
-    PutOutsideBoard
 }
 
 fn action_when_shape_placed(board: &Board, shape_hexes: &[Hex], current_player: usize) -> PutShapeAction {
@@ -433,7 +447,7 @@ fn is_hexes_belong_to_different_players(board: &Board, hex1: Hex, hex2: Hex) -> 
 
 fn board_system(
     mut board_hexes: Query<(&mut Sprite, &Hex), With<BoardHex>>,
-    game: Res<GameState>,
+    game: Res<Game>,
     selected_hexagons: Query<&GlobalTransform, (With<Selectable>, With<Selected>)>,
 ) {
     let selected_hexes: Vec<Hex> = selected_hexagons.iter().map(|transform|
