@@ -4,6 +4,7 @@ use crate::hex::{Hex, Rotation};
 use Rotation::*;
 use crate::game::*;
 
+const ALL_ROTATIONS: [Rotation; 6] = [Rot0, Rot60Cw, Rot120Cw, Rot180, Rot60Ccw, Rot120Ccw];
 const BOARD_SECTOR: [i32; 11] = [0, 11, 10, 10, 9, 9, 8, 8, 6, 4, 2];
 const BOARD_SECTOR_SMALL: [i32; 8] = [0, 8, 7, 7, 6, 6, 4, 2];
 
@@ -22,7 +23,7 @@ pub fn call(
         asset_server.load("drop5.ogg")
     ];
 
-    fill_board(&mut game.board, true, false);
+    fill_board(&mut game.board, true);
     let player_count = game.player_count;
     disable_unused(&mut game.board, player_count);
 
@@ -87,15 +88,10 @@ fn build_hex(location: Vec2, texture: &Handle<Image>, color: Color) -> SpriteBun
     }
 }
 
-fn fill_board(board: &mut Board, disabled: bool, small: bool) {
+fn fill_board(board: &mut Board, disabled: bool) {
     board.insert(Hex { q: 0, r: 0 }, Cell::Empty);
-    for rotation in [Rot0,Rot60Cw,Rot120Cw,Rot180,Rot60Ccw,Rot120Ccw] {
-        if small {
-            fill_board_sector_small(board, rotation);
-        } else {
-
-            fill_board_sector(board, rotation, disabled);
-        }
+    for rotation in ALL_ROTATIONS {
+        fill_board_sector(board, rotation, disabled);
     }
 }
 
@@ -107,7 +103,7 @@ fn fill_board_sector(board: &mut Board, rotation: Rotation, disabled: bool) {
             } else {
                 Cell::Empty
             };
-            board.insert(Hex { q: q as i32, r }.rotate(rotation), cell);
+            board.insert(Hex { q, r }.rotate(rotation), cell);
         }
     }
 }
@@ -115,7 +111,7 @@ fn fill_board_sector(board: &mut Board, rotation: Rotation, disabled: bool) {
 fn fill_board_sector_small(board: &mut Board, rotation: Rotation) {
     for q in 0..8 {
         for r in 0..BOARD_SECTOR_SMALL[q as usize] {
-            board.insert(Hex { q: q as i32, r }.rotate(rotation), Cell::Empty);
+            board.insert(Hex { q, r }.rotate(rotation), Cell::Empty);
         }
     }
 }
@@ -123,24 +119,37 @@ fn fill_board_sector_small(board: &mut Board, rotation: Rotation) {
 fn disable_unused(board: &mut Board, player_count: usize) {
     match player_count {
         2 | 4 => {
-            two_player_setup(board)
+            four_player_setup(board)
         }
         3 => {
             three_player_setup(board)
         }
-        6 => {
+        5 | 6 => {
             six_player_setup(board)
         }
         _ => todo!()
     }
 }
 
-fn two_player_setup(board: &mut Board) {
-    todo!()
+fn four_player_setup(board: &mut Board) {
+    for q in -9..=9 {
+        let r_length = (((q + 9) as f32) / 2.0).floor() as i32 + 4;
+        for r in 0..r_length {
+            board.insert(Hex { q, r: -r }, Cell::Empty);
+            board.insert(Hex { q: -q, r }, Cell::Empty);
+        }
+    }
+
+    board.insert(Hex { q: 9, r: 3 }, Cell::PlayerStart(0));
+    board.insert(Hex { q: -9, r: 12 }, Cell::PlayerStart(1));
+    board.insert(Hex { q: -9, r: -3 }, Cell::PlayerStart(2));
+    board.insert(Hex { q: 9, r: -12 }, Cell::PlayerStart(3));
 }
 
 fn three_player_setup(board: &mut Board) {
-    fill_board(board, false, true);
+    for rotation in ALL_ROTATIONS {
+        fill_board_sector_small(board, rotation);
+    }
 
     board.insert(Hex { q: 5, r: 5 }, Cell::PlayerStart(0));
     board.insert(Hex { q: 5, r: 5 }.rotate(Rot120Cw), Cell::PlayerStart(1));
@@ -148,7 +157,7 @@ fn three_player_setup(board: &mut Board) {
 }
 
 fn six_player_setup(board: &mut Board) {
-    fill_board(board, false, false);
+    fill_board(board, false);
 
     board.insert(Hex { q: 7, r: 7 }, Cell::PlayerStart(0));
     board.insert(Hex { q: 7, r: 7 }.rotate(Rot60Cw), Cell::PlayerStart(1));
