@@ -39,8 +39,8 @@ enum GameState {
     #[default]
     Menu,
     Game,
+    GameEnd
 }
-
 
 fn setup(mut commands: Commands) {
     let mut camera_bundle = Camera2dBundle::default();

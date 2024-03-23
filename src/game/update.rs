@@ -118,8 +118,8 @@ pub fn put_shape(
                     commands.entity(shape_hex).despawn();
                 }
                 commands.entity(shape_entity).despawn();
+                game.pass_turn_count = 0;
                 game.current_player = (game.current_player + 1) % game.player_count;
-
 
                 if let Some(source) = game.drop_audio_handles.choose(&mut rand::thread_rng()) {
                     commands.spawn(AudioBundle {
@@ -146,17 +146,14 @@ pub fn put_shape(
 }
 
 fn action_when_shape_placed(board: &Board, shape_hexes: &[Hex], current_player: usize) -> PutShapeAction {
-    let hexes_on_board = shape_hexes.iter().filter(|hex| board.contains_key(hex)).count();
-    if hexes_on_board == shape_hexes.len() {
-        if shape_can_be_placed_on_board(board, shape_hexes, current_player) {
-            PutShapeAction::PutOnBoard
-        } else {
-            PutShapeAction::ReturnToOrigin
-        }
-    } else if hexes_on_board > 0 && hexes_on_board < shape_hexes.len() {
-        PutShapeAction::ReturnToOrigin
-    } else {
+    let outside_board = shape_hexes.iter().all(|hex| !board.contains_key(hex));
+
+    if outside_board {
         PutShapeAction::PutOutsideBoard
+    } else if shape_can_be_placed_on_board(board, shape_hexes, current_player) {
+        PutShapeAction::PutOnBoard
+    } else {
+        PutShapeAction::ReturnToOrigin
     }
 }
 
@@ -165,9 +162,10 @@ fn shape_can_be_placed_on_board(board: &Board, shape_hexes: &[Hex], current_play
         match board.get(hex) {
             // always can place on own starting square
             Some(Cell::PlayerStart(index)) if *index == current_player => return true,
-            // can't place when have cell occupied
-            Some(Cell::Player(_)) => return false,
-            Some(Cell::Disabled) => return false,
+            // can't place when cell occupied
+            Some(Cell::Player(_) | Cell::Disabled) => return false,
+            // can't place when partially on board
+            None => return false,
             _ => ()
         }
 
@@ -209,12 +207,9 @@ pub fn board_system(
     ).collect();
 
     for (mut sprite, hex) in &mut board_hexes {
-        if selected_hexes.contains(hex) {
-            let action = action_when_shape_placed(&game.board, &selected_hexes, game.current_player);
-            if matches!(action, PutShapeAction::PutOnBoard) {
-                sprite.color = Color::GRAY;
-                continue;
-            }
+        if selected_hexes.contains(hex) && shape_can_be_placed_on_board(&game.board, &selected_hexes, game.current_player) {
+            sprite.color = Color::GRAY;
+            continue;
         }
 
         if let Some(cell) = game.board.get(hex) {
@@ -232,6 +227,156 @@ pub fn board_system(
     }
 }
 
+pub fn on_pass_turn(
+    mut ev_pass: EventReader<PassTurnEvent>,
+    mut game: ResMut<Game>,
+    mut game_state: ResMut<NextState<GameState>>,
+    blocks: Query<(&Selectable, &PlayerIndex)>,
+    pieces: Query<(&HexShape, &PlayerIndex)>,
+) {
+    for _ev in ev_pass.read() {
+        game.current_player = (game.current_player + 1) % game.player_count;
+        game.pass_turn_count += 1;
+        let players_have_turns = game.pass_turn_count < game.player_count;
+        if players_have_turns {
+            continue
+        }
+
+        game_state.set(GameState::GameEnd);
+
+        let players_stats: Vec<PlayerStats> = players_stats(game.player_count, &blocks, &pieces);
+
+        game.winner_player = detect_winner(players_stats);
+
+        if let Some(index) = game.winner_player {
+            println!("Winner is {index:?}");
+        } else {
+            println!("No winner");
+        }
+
+    }
+}
+
+fn players_stats(
+    player_count: usize,
+    blocks: &Query<(&Selectable, &PlayerIndex)>,
+    pieces: &Query<(&HexShape, &PlayerIndex)>
+) -> Vec<PlayerStats> {
+    let mut players_stats: Vec<PlayerStats> = Vec::new();
+    for i in 0..player_count {
+        let blocks_count =
+            blocks
+                .iter()
+                .filter(|(_, &PlayerIndex(player_index))| player_index == i)
+                .count();
+
+        let smallest_piece_option =
+            pieces
+                .iter()
+                .filter(|(_, &PlayerIndex(player_index))| player_index == i)
+                .map(|(&HexShape(size), _)| size)
+                .max();
+
+        if let Some(smallest_piece) = smallest_piece_option {
+            players_stats.push(PlayerStats { index: i, blocks: blocks_count, largest_piece: smallest_piece });
+        }
+    }
+    players_stats
+}
+
+#[derive(Debug)]
+struct PlayerStats {
+    index: usize,
+    blocks: usize,
+    largest_piece: usize
+}
+
 fn hex_collision_with_point(point: Vec2, translation: Vec3) -> bool{
     translation.xy().distance_squared(point) <= HEX_RADIUS * HEX_RADIUS
 }
+
+fn detect_winner(
+    mut players_stats: Vec<PlayerStats>,
+) -> Option<usize> {
+    println!("Players stats: {players_stats:?}");
+    if players_stats.is_empty() {
+        println!("No players with pieces");
+        return None;
+    }
+
+    // rule 1
+    let minimum_blocks = players_stats.iter().map(|s| s.blocks).min().unwrap();
+    players_stats.retain(|s| s.blocks == minimum_blocks);
+    println!("Players stats with minimum number of blocks: {players_stats:?}");
+    if players_stats.len() == 1 {
+        let player_stat = players_stats.first().unwrap();
+        return Some(player_stat.index);
+    }
+
+    // rule 2
+    let smallest_largest_piece = players_stats.iter().map(|s| s.largest_piece).min().unwrap();
+    players_stats.retain(|s| s.largest_piece == smallest_largest_piece);
+    println!("Players stats with smallest largest piece: {players_stats:?}");
+    if players_stats.len() == 1 {
+        let player_stat = players_stats.first().unwrap();
+        return Some(player_stat.index);
+    }
+
+    todo!("rule 3 not implemented");
+}
+
+// fn is_game_end(player_index: usize, board: &Board) {
+//     // If no player can make a move, the game ends.
+//     // If a player has no pieces or no valid moves, the player cannot make a move.
+//     // The player with fewer blocks comprising their pieces wins,
+//     // otherwise the player with the largest piece smaller than the rest of the players wins.
+//     // Otherwise, the algorithm for calculating the value of pieces is used.
+//     let player_placed_blocks: Vec<Hex> =
+//         board.iter().filter_map(|(&k, v)|
+//             if matches!(v, Cell::Player(i) if *i == player_index) {
+//                 Some(k)
+//             } else {
+//                 None
+//             }
+//         ).collect();
+
+// }
+
+// // piece_blocks - first block is always Hex { 0, 0 }
+// //
+// // this function is not optimized
+// fn is_piece_fits(placed_blocks: &[Hex], piece_blocks: &[Hex], board: &Board, current_player: usize) -> bool {
+//     //  find already placed cells
+//     //      find this cell neigbours
+//     //          for each piece rotation
+//     //              for each starting block
+//     //                  return true if piece fits
+
+//     for &placed_block in placed_blocks {
+//         for (offset, _, _) in DIAGONAL_NEIGHBOURS {
+//             let block_to_check = placed_block + offset;
+
+//             match board.get(&block_to_check) {
+//                 Some(Cell::Empty | Cell::PlayerStart(_)) => (),
+//                 _ => continue
+//             }
+
+//             for rotation in ALL_ROTATIONS {
+//                 assert_eq!(piece_blocks[0], Hex::ZERO);
+//                 let rotated_blocks: Vec<Hex> = piece_blocks.iter().map(|block| block.rotate(rotation)).collect();
+//                 assert_eq!(rotated_blocks[0], Hex::ZERO);
+
+//                 for starting_block in rotated_blocks.as_slice() {
+//                     let blocks_with_offset: Vec<Hex> =
+//                         rotated_blocks.iter().map(|block| *block - *starting_block).collect();
+
+//                     if shape_can_be_placed_on_board(board, &blocks_with_offset, current_player) {
+//                         return true;
+//                     }
+//                 }
+//             }
+//         }
+//     }
+
+//     false
+// }

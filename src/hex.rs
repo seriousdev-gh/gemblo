@@ -19,6 +19,8 @@ pub enum Rotation {
 }
 
 impl Hex {
+    pub const ZERO: Self = Self { q: 0, r: 0 };
+
     fn to_cube(&self) -> HexCube {
         HexCube {
             q: self.q,
@@ -45,13 +47,21 @@ impl Hex {
     }
 }
 
-// impl std::ops::Add<&Hex> for Hex {
-//     type Output = Hex;
+impl std::ops::Add<Hex> for Hex {
+    type Output = Hex;
 
-//     fn add(&self, rhs: &Hex) -> Hex {
-//         Self { q: self.q + rhs.q, r: self.r + rhs.r }
-//     }
-// }
+    fn add(self, rhs: Hex) -> Hex {
+        Self { q: self.q + rhs.q, r: self.r + rhs.r }
+    }
+}
+
+impl std::ops::Sub<Hex> for Hex {
+    type Output = Hex;
+
+    fn sub(self, rhs: Hex) -> Hex {
+        Self { q: self.q - rhs.q, r: self.r - rhs.r }
+    }
+}
 
 struct HexCube {
     pub q: i32,
