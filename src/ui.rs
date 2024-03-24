@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use rand::seq::index;
 
 use crate::{
     despawn_screen,
@@ -196,7 +195,7 @@ fn print_winner_info(game: Res<Game>, mut query: Query<&mut Text, With<PlayerTex
         if let Some(index) = game.winner_player {
             text.sections[0].value = format!("Player: {} is winner", index + 1);
         } else {
-            text.sections[0].value = format!("Draw");
+            text.sections[0].value = "Draw".to_string();
         }
 
     }

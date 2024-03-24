@@ -4,32 +4,39 @@ use rand::seq::SliceRandom;
 use crate::{hex::Hex, CursorWorldCoords};
 use crate::game::*;
 
-pub fn pickup_shape(
+#[derive(Debug)]
+struct PlayerStats {
+    index: usize,
+    blocks: usize,
+    largest_piece: usize
+}
+
+pub fn pickup_piece(
     world_cursor: Res<CursorWorldCoords>,
     btn: Res<ButtonInput<MouseButton>>,
     mut game: ResMut<Game>,
-    hexagons: Query<(&Parent, &GlobalTransform, &PlayerIndex), With<Selectable>>,
-    shapes: Query<(&Transform, &Children), (With<HexShape>, Without<Selected>)>,
-    selected_shape: Query<Entity, (With<HexShape>, With<Selected>)>,
+    selectable_blocks: Query<(&Parent, &GlobalTransform, &PlayerIndex), With<BlockSelectable>>,
+    pieces: Query<(&Transform, &Children), (With<Piece>, Without<Selected>)>,
+    selected_piece: Query<Entity, (With<Piece>, With<Selected>)>,
     mut commands: Commands,
 ) {
-    if !selected_shape.is_empty() || !btn.just_pressed(MouseButton::Left) {
+    if !selected_piece.is_empty() || !btn.just_pressed(MouseButton::Left) {
         return;
     }
 
-    for (parent, child_transform, player_index) in hexagons.iter() {
+    for (parent, child_transform, player_index) in selectable_blocks.iter() {
         if game.current_player != player_index.0 {
             continue;
         }
 
         if hex_collision_with_point(world_cursor.0, child_transform.translation()) {
-            let parent_shape_result = shapes.get(parent.get());
-            if let Ok(parent_shape) = parent_shape_result {
-                game.original_transform = *parent_shape.0;
-                game.mouse_offset = parent_shape.0.translation.xy() - world_cursor.0;
+            let parent_piece_result = pieces.get(parent.get());
+            if let Ok(parent_piece) = parent_piece_result {
+                game.original_transform = *parent_piece.0;
+                game.mouse_offset = parent_piece.0.translation.xy() - world_cursor.0;
 
                 commands.entity(parent.get()).insert(Selected);
-                for child in parent_shape.1.iter() {
+                for child in parent_piece.1.iter() {
                     commands.entity(*child).insert(Selected);
                 }
             }
@@ -38,15 +45,15 @@ pub fn pickup_shape(
     }
 }
 
-pub fn move_shape(
+pub fn move_piece(
     mut scroll_evr: EventReader<MouseWheel>,
     btn: Res<ButtonInput<KeyCode>>,
     world_cursor: Res<CursorWorldCoords>,
     mut game: ResMut<Game>,
-    mut selected_shape: Query<&mut Transform, (With<HexShape>, With<Selected>)>,
-    mut selected_hexagons: Query<(&GlobalTransform, &mut Sprite), (With<Selectable>, With<Selected>)>,
+    mut selected_piece: Query<&mut Transform, (With<Piece>, With<Selected>)>,
+    mut selected_blocks: Query<(&GlobalTransform, &mut Sprite), (With<BlockSelectable>, With<Selected>)>,
 ) {
-    if let Ok(mut shape_transform) = selected_shape.get_single_mut() {
+    if let Ok(mut piece_transform) = selected_piece.get_single_mut() {
         let mut angle = 0.0_f32;
 
         if btn.just_pressed(KeyCode::KeyR) {
@@ -66,23 +73,23 @@ pub fn move_shape(
         }
 
         game.mouse_offset = Quat::from_rotation_z(angle).mul_vec3(game.mouse_offset.extend(0.0)).xy();
-        shape_transform.rotate(Quat::from_rotation_z(angle));
+        piece_transform.rotate(Quat::from_rotation_z(angle));
 
-        shape_transform.translation = Vec3 {
+        piece_transform.translation = Vec3 {
             x: game.mouse_offset.x + world_cursor.0.x,
             y: game.mouse_offset.y + world_cursor.0.y,
             z: SELECTED_Z
         };
     }
 
-    if !selected_hexagons.is_empty() {
-        let rounded_shape_hexes: Vec<Hex> = selected_hexagons.iter().map(|(transform, _)|
+    if !selected_blocks.is_empty() {
+        let rounded_piece_blocks: Vec<Hex> = selected_blocks.iter().map(|(transform, _)|
             pixel_to_hex(transform.translation().xy())
         ).collect();
-        let shape_status = action_when_shape_placed(&game.board, &rounded_shape_hexes, game.current_player);
-        for (_, mut sprite) in selected_hexagons.iter_mut() {
-            let alpha = match shape_status {
-                PutShapeAction::ReturnToOrigin => 0.8,
+        let piece_status = action_when_piece_placed(&game.board, &rounded_piece_blocks, game.current_player);
+        for (_, mut sprite) in selected_blocks.iter_mut() {
+            let alpha = match piece_status {
+                PutPieceAction::ReturnToOrigin => 0.8,
                 _ => 1.0
             };
             sprite.color = sprite.color.with_a(alpha);
@@ -91,33 +98,33 @@ pub fn move_shape(
 
 }
 
-pub fn put_shape(
+pub fn put_piece(
     btn: Res<ButtonInput<MouseButton>>,
     mut game: ResMut<Game>,
-    mut selected_hexagons: Query<(Entity, &GlobalTransform, &mut Sprite), (With<Selectable>, With<Selected>)>,
-    mut selected_shape: Query<(Entity, &mut Transform), (With<HexShape>, With<Selected>)>,
+    mut selected_blocks: Query<(Entity, &GlobalTransform, &mut Sprite), (With<BlockSelectable>, With<Selected>)>,
+    mut selected_piece: Query<(Entity, &mut Transform), (With<Piece>, With<Selected>)>,
     mut commands: Commands,
 ) {
     if !btn.just_released(MouseButton::Left) {
         return;
     }
 
-    if let Ok((shape_entity, mut shape_transform)) = selected_shape.get_single_mut() {
-        let rounded_shape_hexes: Vec<Hex> = selected_hexagons.iter().map(|(_, transform, _)|
+    if let Ok((piece_entity, mut piece_transform)) = selected_piece.get_single_mut() {
+        let rounded_piece_hexes: Vec<Hex> = selected_blocks.iter().map(|(_, transform, _)|
             pixel_to_hex(transform.translation().xy())
         ).collect();
-        let shape_status = action_when_shape_placed(&game.board, &rounded_shape_hexes, game.current_player);
+        let piece_status = action_when_piece_placed(&game.board, &rounded_piece_hexes, game.current_player);
 
-        match shape_status {
-            PutShapeAction::PutOnBoard => {
+        match piece_status {
+            PutPieceAction::PutOnBoard => {
                 let current_player = game.current_player;
-                for hex in rounded_shape_hexes {
+                for hex in rounded_piece_hexes {
                     game.board.insert(hex, Cell::Player(current_player));
                 }
-                for (shape_hex, _, _) in selected_hexagons.iter() {
-                    commands.entity(shape_hex).despawn();
+                for (piece_hex, _, _) in selected_blocks.iter() {
+                    commands.entity(piece_hex).despawn();
                 }
-                commands.entity(shape_entity).despawn();
+                commands.entity(piece_entity).despawn();
                 game.pass_turn_count = 0;
                 game.current_player = (game.current_player + 1) % game.player_count;
 
@@ -128,59 +135,58 @@ pub fn put_shape(
                     });
                 }
             },
-            PutShapeAction::ReturnToOrigin => {
-                shape_transform.translation = game.original_transform.translation;
-                shape_transform.rotation = game.original_transform.rotation;
+            PutPieceAction::ReturnToOrigin => {
+                piece_transform.translation = game.original_transform.translation;
+                piece_transform.rotation = game.original_transform.rotation;
             },
-            PutShapeAction::PutOutsideBoard => {
+            PutPieceAction::PutOutsideBoard => {
             }
         }
 
-        for (shape_hex, _, mut sprite) in selected_hexagons.iter_mut() {
+        for (block, _, mut sprite) in selected_blocks.iter_mut() {
             sprite.color = sprite.color.with_a(1.0);
-            shape_transform.translation.z = DEFAULT_Z;
-            commands.entity(shape_hex).remove::<Selected>();
+            piece_transform.translation.z = DEFAULT_Z;
+            commands.entity(block).remove::<Selected>();
         }
-        commands.entity(shape_entity).remove::<Selected>();
+        commands.entity(piece_entity).remove::<Selected>();
     }
 }
 
-fn action_when_shape_placed(board: &Board, shape_hexes: &[Hex], current_player: usize) -> PutShapeAction {
-    let outside_board = shape_hexes.iter().all(|hex| !board.contains_key(hex));
+fn action_when_piece_placed(board: &Board, piece_blocks: &[Hex], current_player: usize) -> PutPieceAction {
+    let outside_board = piece_blocks.iter().all(|hex| !board.contains_key(hex));
 
     if outside_board {
-        PutShapeAction::PutOutsideBoard
-    } else if shape_can_be_placed_on_board(board, shape_hexes, current_player) {
-        PutShapeAction::PutOnBoard
+        PutPieceAction::PutOutsideBoard
+    } else if piece_can_be_placed_on_board(board, piece_blocks, current_player) {
+        PutPieceAction::PutOnBoard
     } else {
-        PutShapeAction::ReturnToOrigin
+        PutPieceAction::ReturnToOrigin
     }
 }
 
-fn shape_can_be_placed_on_board(board: &Board, shape_hexes: &[Hex], current_player: usize) -> bool {
-    for hex in shape_hexes {
+fn piece_can_be_placed_on_board(board: &Board, piece_blocks: &[Hex], current_player: usize) -> bool {
+    for hex in piece_blocks {
         match board.get(hex) {
             // always can place on own starting square
             Some(Cell::PlayerStart(index)) if *index == current_player => return true,
             // can't place when cell occupied
-            Some(Cell::Player(_) | Cell::Disabled) => return false,
             // can't place when partially on board
-            None => return false,
+            Some(Cell::Player(_) | Cell::Disabled) | None => return false,
             _ => ()
         }
 
         // can't place when have direct neighbours
-        if NEIGHBOURS.iter().any(|n|
-            is_hex_belong_to_player(board, hex.add(n), current_player)
+        if NEIGHBOURS.into_iter().any(|n|
+            is_hex_belong_to_player(board, *hex + n, current_player)
         ) {
             return false;
         }
     }
 
-    shape_hexes.iter().any(|hex|
-        DIAGONAL_NEIGHBOURS.iter().any(|(diagonal, near_1, near_2)|
-            is_hex_belong_to_player(board, hex.add(diagonal), current_player) &&
-            is_hexes_belong_to_different_players(board, hex.add(near_1), hex.add(near_2))
+    piece_blocks.iter().any(|&hex|
+        DIAGONAL_NEIGHBOURS.into_iter().any(|(diagonal, near_1, near_2)|
+            is_hex_belong_to_player(board, hex + diagonal, current_player) &&
+            is_hexes_belong_to_different_players(board, hex + near_1, hex + near_2)
         )
     )
 }
@@ -200,14 +206,14 @@ fn is_hexes_belong_to_different_players(board: &Board, hex1: Hex, hex2: Hex) -> 
 pub fn board_system(
     mut board_hexes: Query<(&mut Sprite, &Hex), With<BoardHex>>,
     game: Res<Game>,
-    selected_hexagons: Query<&GlobalTransform, (With<Selectable>, With<Selected>)>,
+    selected_blocks: Query<&GlobalTransform, (With<BlockSelectable>, With<Selected>)>,
 ) {
-    let selected_hexes: Vec<Hex> = selected_hexagons.iter().map(|transform|
+    let selected_hexes: Vec<Hex> = selected_blocks.iter().map(|transform|
         pixel_to_hex(transform.translation().xy())
     ).collect();
 
     for (mut sprite, hex) in &mut board_hexes {
-        if selected_hexes.contains(hex) && shape_can_be_placed_on_board(&game.board, &selected_hexes, game.current_player) {
+        if selected_hexes.contains(hex) && piece_can_be_placed_on_board(&game.board, &selected_hexes, game.current_player) {
             sprite.color = Color::GRAY;
             continue;
         }
@@ -231,8 +237,8 @@ pub fn on_pass_turn(
     mut ev_pass: EventReader<PassTurnEvent>,
     mut game: ResMut<Game>,
     mut game_state: ResMut<NextState<GameState>>,
-    blocks: Query<(&Selectable, &PlayerIndex)>,
-    pieces: Query<(&HexShape, &PlayerIndex)>,
+    blocks: Query<(&BlockSelectable, &PlayerIndex)>,
+    pieces: Query<(&Piece, &PlayerIndex)>,
 ) {
     for _ev in ev_pass.read() {
         game.current_player = (game.current_player + 1) % game.player_count;
@@ -259,8 +265,8 @@ pub fn on_pass_turn(
 
 fn players_stats(
     player_count: usize,
-    blocks: &Query<(&Selectable, &PlayerIndex)>,
-    pieces: &Query<(&HexShape, &PlayerIndex)>
+    blocks: &Query<(&BlockSelectable, &PlayerIndex)>,
+    pieces: &Query<(&Piece, &PlayerIndex)>
 ) -> Vec<PlayerStats> {
     let mut players_stats: Vec<PlayerStats> = Vec::new();
     for i in 0..player_count {
@@ -274,7 +280,7 @@ fn players_stats(
             pieces
                 .iter()
                 .filter(|(_, &PlayerIndex(player_index))| player_index == i)
-                .map(|(&HexShape(size), _)| size)
+                .map(|(&Piece(size), _)| size)
                 .max();
 
         if let Some(smallest_piece) = smallest_piece_option {
@@ -282,13 +288,6 @@ fn players_stats(
         }
     }
     players_stats
-}
-
-#[derive(Debug)]
-struct PlayerStats {
-    index: usize,
-    blocks: usize,
-    largest_piece: usize
 }
 
 fn hex_collision_with_point(point: Vec2, translation: Vec3) -> bool{
@@ -370,7 +369,7 @@ fn detect_winner(
 //                     let blocks_with_offset: Vec<Hex> =
 //                         rotated_blocks.iter().map(|block| *block - *starting_block).collect();
 
-//                     if shape_can_be_placed_on_board(board, &blocks_with_offset, current_player) {
+//                     if piece_can_be_placed_on_board(board, &blocks_with_offset, current_player) {
 //                         return true;
 //                     }
 //                 }

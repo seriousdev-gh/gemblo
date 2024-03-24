@@ -17,8 +17,8 @@ pub fn game_plugin(app: &mut App) {
     app
         .add_event::<PassTurnEvent>()
         .add_systems(OnEnter(GameState::Game), (despawn_screen::<OnGameScreen>, setup::call).chain())
-        .add_systems(Update, (pickup_shape, board_system, on_pass_turn).run_if(in_state(GameState::Game)))
-        .add_systems(Update, (move_shape, put_shape).chain().run_if(in_state(GameState::Game)))
+        .add_systems(Update, (pickup_piece, board_system, on_pass_turn).run_if(in_state(GameState::Game)))
+        .add_systems(Update, (move_piece, put_piece).chain().run_if(in_state(GameState::Game)))
         .add_systems(OnEnter(GameState::Menu), despawn_screen::<OnGameScreen>)
         .add_systems(OnExit(GameState::GameEnd), despawn_screen::<OnGameScreen>);
 }
@@ -56,16 +56,16 @@ struct BoardComponent;
 struct BoardHex;
 
 #[derive(Component)]
-struct Selectable;
-
-#[derive(Component)]
-struct PlayerIndex(usize);
+struct BlockSelectable;
 
 #[derive(Component)]
 struct Selected;
 
 #[derive(Component)]
-struct HexShape(NumberOfBlocks);
+struct PlayerIndex(usize);
+
+#[derive(Component)]
+struct Piece(NumberOfBlocks);
 
 #[derive(Component)]
 struct OnGameScreen;
@@ -79,7 +79,7 @@ enum Cell {
     PlayerStart(usize)
 }
 
-enum PutShapeAction {
+enum PutPieceAction {
     PutOnBoard,
     ReturnToOrigin,
     PutOutsideBoard
@@ -112,7 +112,6 @@ pub fn player_color(player_index: usize) -> Color {
     Color::hsl(player_index as f32 / MAX_PLAYERS as f32 * 360.0, 1.0, 0.5)
 }
 
-// TODO: implement as method
 fn hex_to_pixel(hex: &Hex) -> Vec2 {
     Vec2 {
         x: HEX_RADIUS * (3./2. * hex.q as f32),
@@ -120,7 +119,6 @@ fn hex_to_pixel(hex: &Hex) -> Vec2 {
     }
 }
 
-// TODO: implement as method
 fn pixel_to_hex(pixel: Vec2) -> Hex {
     let q = ( 2./3.0 * pixel.x) / HEX_RADIUS;
     let r = (-1./3.0 * pixel.x + SQRT_3/3.0 * -pixel.y) / HEX_RADIUS;

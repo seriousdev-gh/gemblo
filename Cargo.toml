@@ -11,7 +11,8 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 3
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lints.clippy]
+type_complexity = "allow"
 
 [dependencies]
 bevy = { version = "0.13.0", features = ["dynamic_linking"] }

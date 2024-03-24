@@ -19,9 +19,7 @@ pub enum Rotation {
 }
 
 impl Hex {
-    pub const ZERO: Self = Self { q: 0, r: 0 };
-
-    fn to_cube(&self) -> HexCube {
+    fn to_cube(self) -> HexCube {
         HexCube {
             q: self.q,
             r: self.r,
@@ -29,15 +27,7 @@ impl Hex {
         }
     }
 
-    pub fn add(&self, rhs: &Hex) -> Hex {
-        Self { q: self.q + rhs.q, r: self.r + rhs.r }
-    }
-
-    pub fn sub(&self, rhs: &Hex) -> Hex {
-        Self { q: self.q - rhs.q, r: self.r - rhs.r }
-    }
-
-    pub fn rotate(&self, rotation: Rotation) -> Self {
+    pub fn rotate(self, rotation: Rotation) -> Self {
         self.to_cube().rotate(rotation).to_hex()
     }
 
@@ -98,11 +88,11 @@ impl HexCube {
         let s_diff = (s as f32 - frac_s).round();
 
         if q_diff > r_diff && q_diff > s_diff {
-            q = -r-s
+            q = -r-s;
         } else if r_diff > s_diff {
-            r = -q-s
+            r = -q-s;
         } else {
-            s = -q-r
+            s = -q-r;
         }
 
         Self { q, r, s }

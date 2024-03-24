@@ -44,7 +44,7 @@ pub fn call(
     mut game: ResMut<Game>,
     asset_server: Res<AssetServer>
 ) {
-    let hex_texture_handle = &asset_server.load("hex.png");
+    let block_texture_handle = &asset_server.load("hex.png");
 
     game.drop_audio_handles = vec![
         asset_server.load("drop1.ogg"),
@@ -60,13 +60,12 @@ pub fn call(
     setup_board_for_players(&mut game.board, player_count);
 
     commands.spawn((OnGameScreen, BoardComponent, SpatialBundle::default())).with_children(|parent| {
-        for (hex, _) in game.board.iter() {
-            let location = hex_to_pixel(hex);
+        for &hex in game.board.keys() {
             parent.spawn(
                 (
-                    build_hex(location, hex_texture_handle, Color::WHITE),
+                    build_block_sprite(hex, block_texture_handle, Color::WHITE),
                     BoardHex,
-                    *hex
+                    hex
                 )
             );
         }
@@ -74,47 +73,48 @@ pub fn call(
 
     let piece_sets_count = if player_count == 2 { 4 } else { player_count };
 
-    spawn_pieces(&mut commands, hex_texture_handle, 0, Vec3 { x: 10.0 * HEX_WIDTH, y: -7.0 * HEX_WIDTH, z: 0.0  });
-    spawn_pieces(&mut commands, hex_texture_handle, 1, Vec3 { x: -20.0 * HEX_WIDTH, y: -7.0 * HEX_WIDTH, z: 0.0  });
-    spawn_pieces(&mut commands, hex_texture_handle, 2, Vec3 { x: -25.0 * HEX_WIDTH, y: 4.0 * HEX_WIDTH, z: 0.0  });
+    spawn_pieces(&mut commands, block_texture_handle, 0, Vec3 { x: 10.0 * HEX_WIDTH, y: -7.0 * HEX_WIDTH, z: 0.0  });
+    spawn_pieces(&mut commands, block_texture_handle, 1, Vec3 { x: -20.0 * HEX_WIDTH, y: -7.0 * HEX_WIDTH, z: 0.0  });
+    spawn_pieces(&mut commands, block_texture_handle, 2, Vec3 { x: -25.0 * HEX_WIDTH, y: 4.0 * HEX_WIDTH, z: 0.0  });
     if piece_sets_count > 3 {
-        spawn_pieces(&mut commands, hex_texture_handle, 3, Vec3 { x: -20.0 * HEX_WIDTH, y: 15.0 * HEX_WIDTH, z: 0.0  });
+        spawn_pieces(&mut commands, block_texture_handle, 3, Vec3 { x: -20.0 * HEX_WIDTH, y: 15.0 * HEX_WIDTH, z: 0.0  });
     }
     if piece_sets_count > 4 {
-        spawn_pieces(&mut commands, hex_texture_handle, 4, Vec3 { x: 10.0 * HEX_WIDTH, y: 15.0 * HEX_WIDTH, z: 0.0  });
-        spawn_pieces(&mut commands, hex_texture_handle, 5, Vec3 { x: 15.0 * HEX_WIDTH, y: 4.0 * HEX_WIDTH, z: 0.0  });
+        spawn_pieces(&mut commands, block_texture_handle, 4, Vec3 { x: 10.0 * HEX_WIDTH, y: 15.0 * HEX_WIDTH, z: 0.0  });
+        spawn_pieces(&mut commands, block_texture_handle, 5, Vec3 { x: 15.0 * HEX_WIDTH, y: 4.0 * HEX_WIDTH, z: 0.0  });
     }
 }
 
 fn spawn_pieces(commands: &mut Commands, texture: &Handle<Image>, player_index: usize, starting_translation: Vec3) {
-    for piece_hexes in ALL_PIECES {
-        spawn_piece(commands, texture, player_index, piece_hexes, starting_translation);
+    for piece_blocks in ALL_PIECES {
+        spawn_piece(commands, texture, player_index, piece_blocks, starting_translation);
     }
 }
 
-fn spawn_piece(commands: &mut Commands, texture: &Handle<Image>, player_index: usize, hexes: &[(i32, i32)], starting_translation: Vec3) {
-    let base = Hex { q: hexes[0].0, r: hexes[0].1 };
+fn spawn_piece(commands: &mut Commands, texture: &Handle<Image>, player_index: usize, blocks: &[(i32, i32)], starting_translation: Vec3) {
+    let base = Hex { q: blocks[0].0, r: blocks[0].1 };
     let translation = starting_translation + hex_to_pixel(&base).extend(0.0);
 
     commands.spawn((
         OnGameScreen,
-        HexShape(hexes.len()),
+        Piece(blocks.len()),
         PlayerIndex(player_index),
         SpatialBundle { transform: Transform::from_translation(translation), ..default() }
     )).with_children(|parent| {
-        for tuple in hexes {
+        for tuple in blocks {
             let hex = Hex { q: tuple.0, r: tuple.1 };
-            let relative_translation = hex_to_pixel(&hex.sub(&base));
+            let relative_translation = hex - base;
             parent.spawn((
-                build_hex(relative_translation, texture, player_color(player_index)),
-                Selectable,
+                build_block_sprite(relative_translation, texture, player_color(player_index)),
+                BlockSelectable,
                 PlayerIndex(player_index)
             ));
         }
     });
 }
 
-fn build_hex(location: Vec2, texture: &Handle<Image>, color: Color) -> SpriteBundle {
+fn build_block_sprite(hex: Hex, texture: &Handle<Image>, color: Color) -> SpriteBundle {
+    let location = hex_to_pixel(&hex);
     SpriteBundle {
         sprite: Sprite {
             color,
@@ -157,13 +157,13 @@ fn fill_board_sector_small(board: &mut Board, rotation: Rotation) {
 fn setup_board_for_players(board: &mut Board, player_count: usize) {
     match player_count {
         2 | 4 => {
-            four_player_setup(board)
+            four_player_setup(board);
         }
         3 => {
-            three_player_setup(board)
+            three_player_setup(board);
         }
         5 | 6 => {
-            six_player_setup(board)
+            six_player_setup(board);
         }
         _ => panic!("not implemented")
     }
